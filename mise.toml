@@ -1,0 +1,28 @@
+[tools]
+go = "1.26.5"
+
+[tasks.build]
+description = "Build the agora binary"
+run = "go build -o bin/agora ./cmd/agora"
+
+[tasks.fmt]
+description = "Format"
+run = "gofmt -l -w ."
+
+[tasks.vet]
+description = "Vet"
+run = "go vet ./..."
+
+[tasks.test]
+description = "Run the tests"
+run = "go test ./..."
+
+[tasks.test-race]
+description = "Run the tests with the race detector"
+# Claims and cursors are the only places two agents race, so this is not optional before believing a
+# change to either. See AGENTS.md.
+run = "go test -race ./..."
+
+[tasks.check]
+description = "Format, vet, and test"
+depends = ["fmt", "vet", "test"]
