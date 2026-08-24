@@ -96,6 +96,7 @@ was refused: both print who holds the claim before exiting.`,
 		newGuardCmd(a),
 		newInjectCmd(a),
 		newDoorbellCmd(a),
+		newTUICmd(a),
 	)
 	return root
 }
