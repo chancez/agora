@@ -347,7 +347,31 @@ Nothing to remove exits 0, since a hook that fails on the ordinary case gets rem
 before this existed, `agora leave --as <name>` takes one off and `agora members` lists them; in the TUI, `d`
 with the roster focused asks first.
 
-## Pruning
+## Pruning the roster
+
+A session that ended cleanly takes itself off the roster, because `SessionEnd` ran `agora leave --force`. One
+whose terminal was killed, or that ran before the hook was wired, leaves a row that reads as somebody falling
+behind:
+
+```sh
+agora members --stale    # who has not been heard from
+agora prune --dry-run    # what a sweep would take
+agora prune              # take it
+```
+
+**A member holding a claim is reported and left**, since releasing somebody's claim is the one part of a wrong
+removal that cannot be taken back. `agora leave --as NAME --force` is how to do that on purpose, one name at a
+time. Whoever runs the sweep is never pruned either.
+
+`--stale-after` is the same window `agora members --stale` uses, two hours by default, and one number on purpose:
+the roster is how somebody checks what a sweep would take, so two defaults would make that preview a different
+question. Treat it as a hint: what
+moves a member's clock is agora activity, not being alive. A session was measured working for five hours after its
+last agora command, which is why this is a command somebody runs and not something a hook does. What it costs when
+it is wrong is small, though: cursors survive, so a member pruned by mistake comes back on its next action having
+lost only the line about what it was doing.
+
+## Pruning the record
 
 `agora delete <thread>` removes a thread, its claim, and every cursor on it. Records go wrong, and a mistaken
 finding misleads whoever reads it next.

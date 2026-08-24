@@ -152,22 +152,107 @@ func (s *Store) Leave(ctx context.Context, req LeaveRequest) (LeaveResult, error
 		if req.DryRun {
 			return nil
 		}
-		if len(threads) > 0 && !req.Force {
-			return nil
-		}
-		for _, stmt := range []string{
-			`DELETE FROM claims WHERE channel_id = ? AND holder = ?`,
-			`DELETE FROM members WHERE channel_id = ? AND name = ?`,
-		} {
-			if _, err := tx.ExecContext(ctx, stmt, channelID, req.Member); err != nil {
-				return fmt.Errorf("remove member %q: %w", req.Member, err)
-			}
-		}
-		result.Left = true
-		return nil
+		result.Left, err = dropMember(ctx, tx, channelID, req.Member, threads, req.Force)
+		return err
 	})
 	if err != nil {
 		return LeaveResult{}, err
+	}
+	return result, nil
+}
+
+// dropMember takes one member off the roster, and reports whether it did. Holding a claim stops it unless forced,
+// because a claim whose holder is not in the roster leaves nobody to ask whether the work was finished.
+//
+// Cursors stay, and the reason is in Leave. Shared with Prune so a sweep cannot drift from what leaving one member
+// does: the sweep is exactly this rule, applied to everybody past the window, and never forced.
+func dropMember(ctx context.Context, tx *sql.Tx, channelID int64, member string, held []string, force bool) (bool, error) {
+	if len(held) > 0 && !force {
+		return false, nil
+	}
+	for _, stmt := range []string{
+		`DELETE FROM claims WHERE channel_id = ? AND holder = ?`,
+		`DELETE FROM members WHERE channel_id = ? AND name = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, channelID, member); err != nil {
+			return false, fmt.Errorf("remove member %q: %w", member, err)
+		}
+	}
+	return true, nil
+}
+
+// Prune takes every member last heard from before a cutoff off the roster, which is the sweep for sessions that
+// ended without saying so: SessionEnd only fires on a clean end, and a terminal that was killed fires nothing.
+//
+// Two members it never takes. One holding a claim is reported instead, since releasing somebody's claim is the
+// one thing a wrong removal cannot be taken back, and the caller is left alone because running a sweep is not
+// evidence of being gone.
+//
+// The cutoff is a hint and this is deliberately a command somebody runs rather than something a hook does. What
+// moves a member's clock is agora activity, not being alive: a session was measured working for five hours after
+// its last agora command, so quiet and gone look the same from here.
+func (s *Store) Prune(ctx context.Context, req PruneRequest) (PruneResult, error) {
+	if req.Channel == "" {
+		return PruneResult{}, ErrNoChannel
+	}
+	if req.Member == "" {
+		return PruneResult{}, ErrNoMember
+	}
+	result := PruneResult{Channel: req.Channel, Pruned: []string{}, Held: map[string][]string{}}
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		channelID, err := s.channelID(ctx, tx, req.Channel)
+		if err != nil {
+			return err
+		}
+		// The caller is here, whatever its clock said a moment ago.
+		if err := s.upsertMember(ctx, tx, channelID, req.Member, req.Worktree); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `
+SELECT name FROM members
+WHERE channel_id = ? AND name != ? AND seen_at < ?
+ORDER BY name`, channelID, req.Member, req.Before.UnixNano())
+		if err != nil {
+			return fmt.Errorf("list stale members of %q: %w", req.Channel, err)
+		}
+		defer rows.Close()
+		var stale []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return fmt.Errorf("list stale members of %q: %w", req.Channel, err)
+			}
+			stale = append(stale, name)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("list stale members of %q: %w", req.Channel, err)
+		}
+
+		for _, name := range stale {
+			held, err := heldThreads(ctx, tx, channelID, name)
+			if err != nil {
+				return err
+			}
+			if len(held) > 0 {
+				result.Held[name] = held
+				continue
+			}
+			if req.DryRun {
+				result.Pruned = append(result.Pruned, name)
+				continue
+			}
+			dropped, err := dropMember(ctx, tx, channelID, name, held, false)
+			if err != nil {
+				return err
+			}
+			if dropped {
+				result.Pruned = append(result.Pruned, name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return PruneResult{}, err
 	}
 	return result, nil
 }

@@ -10,6 +10,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// defaultStaleAfter is how long counts as not heard from, for the roster and for the sweep that reads it. One
+// number, because agora members --stale is how somebody checks what agora prune would take, and two defaults
+// would make that preview a different question from the sweep.
+//
+// Two hours rather than the thirty minutes this started at. Thirty flagged a person sitting at the keyboard as
+// stale after 47 minutes, and it is the bar for deleting a row: what moves a member's clock is agora activity,
+// and a session was measured working for five hours after its last agora command.
+const defaultStaleAfter = 2 * time.Hour
+
 // memberReport is a member plus whether they still seem to be here. Unread comes from the store, which
 // is the only place that gets to decide what unread means.
 type memberReport struct {
@@ -33,7 +42,10 @@ running, and their claims stand either way.
 
 --stale narrows to members not heard from recently. A heartbeat moves whenever a
 member posts, reads, or claims, so this is a hint rather than a fact: an agent waiting
-on its user is idle and very much alive. Never release a claim on the strength of it.`,
+on its user is idle and very much alive. Never release a claim on the strength of it.
+
+agora prune takes the ones past that window off the roster, for sessions that ended
+without saying so.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, cfg, err := a.open()
@@ -58,7 +70,7 @@ on its user is idle and very much alive. Never release a claim on the strength o
 		},
 	}
 	cmd.Flags().BoolVar(&staleOnly, "stale", false, "only members not heard from recently")
-	cmd.Flags().DurationVar(&staleAfter, "stale-after", 30*time.Minute, "how long counts as not heard from")
+	cmd.Flags().DurationVar(&staleAfter, "stale-after", defaultStaleAfter, "how long counts as not heard from")
 	return cmd
 }
 

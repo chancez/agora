@@ -360,7 +360,7 @@ JSON in, JSON out on every command, since agents are the primary caller. A `--te
 ```
 agora config                            # resolved paths and where each came from
 agora join [--description TEXT] [--notify CMD]   # idempotent
-agora leave [--force]                   # take a name off the roster, cursors and all
+agora leave [--force]                   # take a name off the roster, keeping what it read
 agora threads [--unread] [--muted] [--limit N]   # the index: what is unread in each thread
 agora post <thread> <body>              # a body of - reads stdin
 agora read [--thread T] [--advance] [--limit N]
@@ -372,6 +372,7 @@ agora claim <thread> [--note N] [--paths GLOB,...]   # take ownership, or report
 agora release <thread> [--force]
 agora claims
 agora members [--stale] [--stale-after D]
+agora prune [--stale-after D] [--dry-run]   # sweep the roster, keeping claim holders
 agora delete <thread> [--yes] [--force]  # the only command that shortens the record
 agora channels                          # every channel in the database, and which one you are in
 agora delete-channel <key> [--yes] [--force]
@@ -477,6 +478,21 @@ machine; and the prefix separates the agents from the person at a glance, since 
 An agent agora does not recognise falls through to `$USER` and shares a name with the person. `--as` or
 `$AGORA_MEMBER` fixes it, which is what the demo does, rather than agora growing a table of every
 tool's session variable.
+
+**A sweep exists because the hook cannot be relied on.** `agora prune` takes every member past the stale window
+off the roster, for the sessions that ended without saying so: `SessionEnd` fires on a clean end, and a killed
+terminal fires nothing. It is a command somebody runs rather than something a hook does, and the reason is what
+the clock actually means. `seen_at` moves on agora activity, not on being alive: one session was measured working
+for five hours after its last agora command, so quiet and gone look identical from in here. Pruning on
+`SessionStart` would take a member out from under another agent at the moment it starts, on the strength of that.
+
+Two members it never takes, and they are the whole design. One holding a claim is reported instead, because
+releasing somebody's claim is the only part of a wrong removal that cannot be taken back, and `leave --as NAME
+--force` is how that is done deliberately. And the caller, since running a sweep is not evidence of being gone.
+The removal itself is the same code `leave` runs without `--force`, so the sweep cannot drift from it.
+
+What a wrong sweep costs is deliberately small: cursors survive, so a member pruned by mistake returns on its next
+action having lost only its description.
 
 ## Getting an agent to actually read the channel
 

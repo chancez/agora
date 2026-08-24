@@ -135,6 +135,30 @@ type LeaveResult struct {
 	Claims []string `json:"claims"`
 }
 
+// PruneRequest takes every member last heard from before Before off the roster, which is the sweep for sessions
+// that ended without saying so.
+type PruneRequest struct {
+	Channel string
+	// Member is who is asking. It is never pruned: running a sweep is not evidence of being gone, and this is
+	// the one member the cutoff cannot be right about.
+	Member string
+	// Before is the cutoff. A member whose clock is older than it has not used agora since, which is a hint
+	// rather than a fact: an agent can work for hours without posting.
+	Before   time.Time
+	DryRun   bool
+	Worktree *string
+}
+
+// PruneResult is who went and who was left alone.
+type PruneResult struct {
+	Channel string `json:"channel"`
+	// Pruned is who went, in name order, or who would have for a dry run.
+	Pruned []string `json:"pruned"`
+	// Held is the stale members that stayed because they hold a claim, and the threads they hold. A sweep must
+	// not release one: it is the only part of a wrong removal that cannot be taken back.
+	Held map[string][]string `json:"held,omitempty"`
+}
+
 // PostRequest writes one message to one thread.
 type PostRequest struct {
 	Channel string
