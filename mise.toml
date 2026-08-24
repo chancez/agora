@@ -5,6 +5,72 @@ go = "1.26.5"
 description = "Build the agora binary"
 run = "go build -o bin/agora ./cmd/agora"
 
+[tasks.install]
+description = "Build and install agora into PREFIX (default ~/.local)"
+depends = ["build"]
+# Installs to $PREFIX/bin, defaulting to ~/.local, so `mise run install` needs no arguments and
+# PREFIX=/usr/local mise run install works for a system install. Same convention as cm, so one habit
+# covers both.
+#
+# The rename is the whole point of having this as a task rather than a cp, and the reason it is here
+# holds whether or not the worse failure below shows up:
+#
+# Renaming from a temporary file in the same directory is atomic, so anything that execs agora during
+# an install gets either the old binary or the new one and never a partial write. That matters more
+# here than it would elsewhere, because agora guard runs in the path of every matching edit and a
+# watch or a tui can be open for hours, so an install is always racing something.
+#
+# The other reason is carried from cm rather than measured here, and the attempt to reproduce it in
+# agora failed, which is worth writing down. In cm, copying onto a path whose binary has a running
+# process got the *next* invocation SIGKILLed on macOS: cp writes into the existing inode, which
+# invalidates the kernel's cached code-signature pages that the live process still maps, and later
+# execs of that path die with signal 9 with nothing in any log. Measured there: cp gave 137 three
+# times running where mv gave 0. Tried the same thing here, with a watch holding the binary and three
+# cp installs over it, and all three following execs exited 0. So this is not agora's measurement, and
+# the rename is kept because it is atomic and because that failure is silent and catastrophic on the
+# occasions it does happen, not because it was seen here.
+run = """
+set -euo pipefail
+prefix="${PREFIX:-$HOME/.local}"
+bindir="$prefix/bin"
+mkdir -p "$bindir"
+
+# Alongside the target rather than in /tmp, since rename only works within one filesystem.
+tmp="$(mktemp "$bindir/.agora.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+cp bin/agora "$tmp"
+chmod 755 "$tmp"
+mv -f "$tmp" "$bindir/agora"
+trap - EXIT
+
+# Proves the thing that landed actually runs, which a copy of the wrong architecture or a truncated
+# write would not. --help touches no database, unlike every other subcommand.
+"$bindir/agora" --help >/dev/null
+echo "installed $bindir/agora"
+if ! command -v agora >/dev/null 2>&1; then
+  echo "note: agora is not on PATH; add $bindir to it" >&2
+elif [ "$(command -v agora)" != "$bindir/agora" ]; then
+  echo "note: $(command -v agora) shadows $bindir/agora on PATH" >&2
+fi
+"""
+
+[tasks.uninstall]
+description = "Remove agora from PREFIX (default ~/.local)"
+# Here so the install has an inverse. Removing the binary leaves a running watch or tui alone, since
+# each holds its own inode, and it leaves the database and every channel in it untouched: this
+# uninstalls the tool, not the record.
+run = """
+set -euo pipefail
+prefix="${PREFIX:-$HOME/.local}"
+target="$prefix/bin/agora"
+if [ -e "$target" ]; then
+  rm -f "$target"
+  echo "removed $target"
+else
+  echo "$target is not installed"
+fi
+"""
+
 [tasks.fmt]
 description = "Format"
 run = "gofmt -l -w ."
