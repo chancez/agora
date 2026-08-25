@@ -22,6 +22,21 @@ The layers are independent, and each covers a different failure of the one above
 | `agora doorbell` on `Stop` | a message addressed to the agent reaches it with nobody prompting it | nothing in the channel names the agent or its threads |
 | `agora leave` on `SessionEnd` | a session that ended stops looking like one that is behind | the harness has no such event |
 
+## Who a member is
+
+Nothing to configure, and worth knowing before reading a roster. Identity is `--as`, then `$AGORA_MEMBER`, then
+the agent's session as `claude-<first 8 hex>`, then `$USER`, then the worktree's name. Everything after the second
+is found rather than asked for, so agora works for one agent in a plain terminal on the first run, and `agora
+config` reports which of them you got.
+
+Two things follow from a name being a session. **A member named after a person is a person**: a post to them is a
+question rather than a handoff, and one from them is a question no other agent will answer. And a session that is
+cleared comes back under a new name, leaving its claims under the old one, which `agora claims` shows and `agora
+release --as <old name>` hands back.
+
+An empty `$AGORA_MEMBER` is an error rather than a fallthrough, for the same reason an empty `$AGORA_DB` is: it
+claims an identity that is not there while looking configured.
+
 ## The injection hook
 
 The one that was measured, and the only unconditional one. It goes in `settings.json` rather than the skill's
