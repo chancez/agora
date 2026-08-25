@@ -53,6 +53,30 @@ No cgo. `modernc.org/sqlite` is the pure-Go driver, chosen so agora stays a stat
 it that way is a constraint rather than an accident: a hook in the edit path must run everywhere without
 a toolchain.
 
+## CI
+
+`.github/workflows/test.yml` runs what `mise run check` and `mise run test-race` run, on Linux and macOS,
+plus two things a developer's machine does not:
+
+- **Every default path is pointed at an empty directory, and a later step fails if anything was written
+  there.** That is this file's "never test against a channel someone is using", enforced instead of
+  trusted: a test that forgets to isolate itself reads the real channel of whoever ran it, and a suite
+  that passes that way passed for the wrong reason.
+- **Cross-compiling all four release targets**, which is the no-cgo constraint checked rather than assumed.
+
+`.github/workflows/release.yml` builds on a `v*` tag, one native runner per target so each artifact can be
+run before it is published, stamps the tag with `-ldflags -X main.version`, and refuses to publish if the
+binary does not report it or the checkout is dirty. The archive carries the binary, `README.md`,
+`docs/setup.md` and the skill, because somebody who downloads a release should not have to clone the
+repository to wire an agent up.
+
+**The scripts in `scripts/` are not in CI.** Each starts real agent sessions through the `claude` CLI,
+which costs tokens and needs credentials, and what they measure is whether an agent behaves differently
+rather than whether the code works. Run them by hand when the thing they measure changes, and put the
+numbers in `docs/design.md`.
+
+`actionlint` reads both workflows if you have it; both were clean when they were added.
+
 ## The rule that matters most: no SQL outside internal/store
 
 ```

@@ -1,0 +1,178 @@
+# Builds release binaries on a version tag and attaches them to a GitHub Release.
+#
+# One job per target, and every one builds natively, even though agora has no cgo and a single runner could
+# cross-compile all four. The reason is the smoke test: a cross-compiled artifact cannot be run by the machine
+# that built it, so nothing would answer the one question this workflow exists to answer, which is whether the
+# thing about to be published starts on a clean machine of that platform. The test workflow already proves the
+# cross-compilation itself.
+name: release
+
+on:
+  push:
+    tags:
+      # Version tags only, so an arbitrary tag cannot publish a release.
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      # Every target's result matters: a release missing one platform is worse than a failed release, because it
+      # looks complete.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            goos: darwin
+            goarch: arm64
+          - os: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - os: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A dirty tree makes the toolchain stamp vcs.modified, and agoraVersion appends "-dirty" to what the binary
+      # reports. The tag is stamped below so that is not what a user would see, but a dirty checkout means the
+      # artifact is not the commit the tag names, which is worth stopping for rather than publishing.
+      - name: Check the tree is clean
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "the checkout is dirty, so the artifact is not the commit this tag names:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+      # CGO_ENABLED=0 spelled out rather than relied on. modernc.org/sqlite is pure Go so this is already the
+      # default, and the whole point of choosing it was that a hook in the path of every edit runs on a machine
+      # with no toolchain: a cgo build would break that quietly, on the one artifact people install.
+      #
+      # The tag is stamped because Go records it in the build info only for `go install module@tag`, not for a
+      # `go build` of a checkout. It comes from the trigger rather than from a constant in the source, so there is
+      # still one place the version lives, and the step after this checks the binary agrees with it.
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o dist/agora ./cmd/agora
+          file dist/agora
+
+      - name: Verify the binary reports the tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          got="$(./dist/agora --version)"
+          echo "tag=$tag reported=$got"
+          case "$got" in
+            *"$tag"*) ;;
+            *)
+              echo "the binary reports '$got', which does not contain the tag '$tag'" >&2
+              exit 1
+              ;;
+          esac
+
+      # A smoke test, not a substitute for the test workflow. It answers the one thing that workflow cannot: does
+      # the artifact about to be published run at all on a clean machine of this platform. A binary that dies on a
+      # missing library passes every unit test and is still useless.
+      #
+      # config is the command to run, because it resolves every path and creates none of them, so it exercises the
+      # startup an installer's first command takes without leaving a database behind.
+      - name: Smoke test the artifact
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/smoke-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/smoke-config
+        run: |
+          set -euo pipefail
+          ./dist/agora --help >/dev/null
+          ./dist/agora config --text
+          ./dist/agora guard --help >/dev/null
+          if [ -e "${{ runner.temp }}/smoke-data/agora" ]; then
+            echo "agora config created a database, which it must never do" >&2
+            exit 1
+          fi
+          echo "artifact runs"
+
+      # The skill ships with the binary rather than after it: an agent that sees an injected claim and has no
+      # protocol understands the problem and stops with nowhere to go, which is measured in docs/design.md. Somebody
+      # who downloads a release should not have to clone the repository to wire that up.
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          name="agora_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          mkdir -p "staging/$name"
+          cp dist/agora "staging/$name/agora"
+          cp README.md "staging/$name/"
+          mkdir -p "staging/$name/docs"
+          cp docs/setup.md "staging/$name/docs/"
+          cp -R skills "staging/$name/"
+          cp LICENSE "staging/$name/"
+          tar -czf "dist/$name.tar.gz" -C staging "$name"
+          echo "artifact=$name.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact }}
+          path: dist/${{ steps.package.outputs.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      # The only job that needs write access, and it needs it to create the release.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One checksums file covering every archive, which is what a Homebrew formula or any scripted installer
+      # verifies against. Generated here rather than per job so it is a single file listing all platforms, and so
+      # no job can publish a checksum for an artifact another job replaced.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -l
+          sha256sum ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # A tag with a dash in it is a pre-release: v1.0.0-rc1 is not something to hand somebody by default.
+          prerelease=""
+          case "$tag" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+          gh release create "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "$tag" \
+            --generate-notes \
+            $prerelease \
+            dist/*.tar.gz dist/SHA256SUMS

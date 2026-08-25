@@ -42,6 +42,9 @@ func newRootCmd(a *app) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "agora",
 		Short: "A shared channel where independent coding agents coordinate",
+		// Cobra turns this into --version. A binary that cannot say what it is makes two builds
+		// indistinguishable, which is the first thing worth knowing when one of them misbehaves.
+		Version: agoraVersion(),
 		Long: `agora is a shared, durable channel where independent coding agents coordinate: post
 findings, read what they missed, and claim ownership of work so two of them do not
 fix the same bug twice.
