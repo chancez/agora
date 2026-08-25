@@ -575,9 +575,16 @@ func TestTheViewOpensAtTheWidthsItWasLeftAt(t *testing.T) {
 		t.Fatalf("Post(): %v", err)
 	}
 
-	program, _, out, done := startWith(t, s, cfg, time.Minute, &memoryLayout{layout: config.Layout{Channels: 24}})
+	saved := config.Layout{Channels: 24, Members: 30}
+	program, _, out, done := startWith(t, s, cfg, time.Minute, &memoryLayout{layout: saved})
 	// The channels title padded to 24 rather than to the 16 it defaults to.
 	waitFor(t, out, "[CHANNELS]              |")
+	// And the roster, which is the one this test used to miss. Init applies the layout before bubbletea reports a
+	// size, so the clamp runs at the 80x24 fallback: a saved channels width of 24 still fits there and came back
+	// right, while the roster is not a column at all at 80 and came back at 8. Asserted through the divider left
+	// of it, since it is the last column and has nothing padded after it: the message title padded to the 39 the
+	// roster leaves rather than to the 49 a defaulted one would.
+	waitFor(t, out, " parser-panic"+strings.Repeat(" ", 26)+"| MEMBERS")
 	quit(t, program, done)
 }
 
@@ -623,6 +630,35 @@ func TestADragSavesTheWidths(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	quit(t, program, done)
+}
+
+// TestOpeningTheViewDoesNotOverwriteTheSavedWidths is the other half of the reported bug, and the half that made
+// it stick: a click that dragged nothing used to write the file. Init applied the layout at the 80x24 fallback,
+// where the roster has 8 columns of room, so what the model held afterwards was 8 rather than the 30 in the file,
+// and the first release wrote that 8 back. One reopen and a click was enough to lose the width for good.
+func TestOpeningTheViewDoesNotOverwriteTheSavedWidths(t *testing.T) {
+	s, cfg := testStore(t)
+	if _, err := s.Post(t.Context(), store.PostRequest{
+		Channel: testChannel, Thread: "parser-panic", Author: "alice", Body: "empty input reaches the token loop",
+	}); err != nil {
+		t.Fatalf("Post(): %v", err)
+	}
+	want := config.Layout{Members: 30}
+	saved := &memoryLayout{layout: want}
+
+	program, keys, out, done := startWith(t, s, cfg, time.Minute, saved)
+	waitFor(t, out, "[CHANNELS]      |")
+	// Press and release on the same column: a click, with no motion between them and so no new width to save.
+	for _, sequence := range []string{"\x1b[<0;17;5M", "\x1b[<0;17;5m"} {
+		if _, err := io.WriteString(keys, sequence); err != nil {
+			t.Fatalf("write %q: %v", sequence, err)
+		}
+	}
+	quit(t, program, done)
+
+	if layout, saves := saved.state(); layout != want || saves != 0 {
+		t.Errorf("the file holds %+v after %d saves, want %+v and never written", layout, saves, want)
+	}
 }
 
 // TestDraggingADividerThroughTheProgram is the wiring the model tests cannot see. They call Update directly, so

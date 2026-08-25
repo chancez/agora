@@ -923,6 +923,20 @@ by a test rather than by reasoning: two oversized widths collapse the columns to
 computed from that collapsed layout leaves both of them still too large, so the view opens as one pane and stays
 there.
 
+**The clamp is layered on top of the asked-for width, never written back into it.** The model keeps two arrays:
+what a drag or the file asked each pane for, which is what gets saved, and that held to what the window has room
+for, which is what gets drawn. Folding one into the other cost the width outright, reported as a dragged roster
+opening back at its minimum every time. `Init` applies the layout before bubbletea reports a size, so the clamp
+ran at the 80x24 fallback, and at 80 columns the roster is not a column at all and `clampSidebar` leaves it the
+8 column minimum. The real size arriving a moment later could not undo it, and the next release wrote that 8 to
+the file, so one reopen and a click lost a saved 30 for good.
+
+Two things hid it. The width the file was written from was the drawn one, so the file was actively overwritten
+rather than merely ignored, which is why it read as "the width is not saved" rather than "not restored". And the
+test that covered the reopen used the channels list, where a saved 24 still fits at 80 columns and so came back
+right: the bug was only reachable through a pane the fallback window drops. The same root cause loses every width
+on a plain resize, narrow and back again, which is the case that says the clamp has to be undoable.
+
 The cost is that capture takes click-drag selection away from the terminal for the whole session. Shift-drag
 gets it back in kitty, iTerm2 and xterm, and the wheel scrolling the message column is what the same capture
 buys. Nothing else the pointer does is interpreted: a click that moved the selection would have to decide what a

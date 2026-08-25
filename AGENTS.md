@@ -307,6 +307,12 @@ do Y and now does X", except in a decision record where the rejected alternative
   while building the doorbell's takeover. So a write that changes nothing is invisible to every watcher,
   which is what a heartbeat would need and what a recheck must not need. Both directions are pinned by an
   internal test, because neither is visible from outside `internal/store`.
+- **bubbletea calls `Init` before the first `WindowSizeMsg`.** So anything `Init` computes from the window size
+  computes it from the 80x24 fallback, and at 80 columns the roster is not a column at all. That is how a saved
+  roster width came back at the 8 column minimum every session while the saved channels width, which still fits
+  at 80, came back right: a bug only reachable through a pane the fallback window drops, and the reopen test
+  covered the pane that fits. Clamp for drawing, keep what was asked for separately, and never fold one into the
+  other.
 - **A skill's frontmatter hooks register only once the skill is invoked.** So the "check before you
   start" wiring cannot ship inside the agora skill: a session that never invokes agora never registers
   it. That hook belongs in settings.

@@ -102,7 +102,10 @@ func (m Model) withLayout(layout config.Layout) Model {
 	return m.fitSidebars()
 }
 
-// Layout is what the widths are now, for whoever saves them.
+// Layout is what the widths were asked for, for whoever saves them, rather than what the window had room to
+// draw. Saving the drawn width instead loses the width: reported as a dragged roster opening back at its
+// minimum. Init reads the file before bubbletea reports a size, so the clamp runs at the 80x24 fallback, where
+// the roster is not shown at all and has 8 columns of room, and 8 is then what gets written back.
 func (m Model) Layout() config.Layout {
 	return config.Layout{
 		Channels: m.sidebars[paneChannels],
@@ -111,28 +114,32 @@ func (m Model) Layout() config.Layout {
 	}
 }
 
-// fitSidebars clamps every width that has one, in pane order. Run when the window changes size and when a saved
-// layout arrives, so a stored width is held to the same rule a dragged one is.
+// fitSidebars recomputes the drawn widths from the asked-for ones, in pane order. Run when the window changes
+// size and when a saved layout arrives, so a stored width is held to the same rule a dragged one is.
+//
+// From m.sidebars every time rather than from the last fit, because the clamp has to be undoable: a window
+// narrowed and widened again, and a layout loaded before the terminal reports its size, both clamp against a
+// width that is not the one the panes end up in, and folding that result back into the asked-for width makes it
+// permanent.
 //
 // Each is clamped against the layout the defaults produce rather than against the one the stored widths produce.
 // That is not a detail: two oversized widths collapse the columns to a single pane, and a clamp computed from
 // that collapsed layout leaves both of them still too large, so the view opens as one pane and stays there.
 func (m Model) fitSidebars() Model {
-	stored := m.sidebars
-	m.sidebars = [panes]int{}
+	m.fitted = [panes]int{}
 	for _, p := range []pane{paneChannels, paneThreads, paneMembers} {
-		if stored[p] > 0 {
-			m.sidebars[p] = m.clampSidebar(p, stored[p])
+		if m.sidebars[p] > 0 {
+			m.fitted[p] = m.clampSidebar(p, m.sidebars[p])
 		}
 	}
 	return m
 }
 
-// paneWidth is a sidebar's width: what a drag set it to, or the default it starts at. The message column is
-// never in here, because it is whatever is left over: that is what makes it the column the others are dropped
-// to protect.
+// paneWidth is a sidebar's width as drawn: what the window had room for, or the default it starts at. The
+// message column is never in here, because it is whatever is left over: that is what makes it the column the
+// others are dropped to protect.
 func (m Model) paneWidth(p pane) int {
-	if w := m.sidebars[p]; w > 0 {
+	if w := m.fitted[p]; w > 0 {
 		return w
 	}
 	return p.width()
@@ -392,9 +399,15 @@ type Model struct {
 	// confirm holds a pending question, and while it is set the movement keys are ignored: navigating away
 	// mid-question and then pressing y would act on whatever the cursor had moved to.
 	confirm *question
-	// sidebars is the width a drag has given each pane, zero meaning the default. Per session on purpose:
-	// where you dragged a divider is a fact about this window, not about the channel.
+	// sidebars is the width a drag or a saved layout asked each pane for, zero meaning the default, and it is
+	// what gets written back to the layout file. fitted is the same widths held to what the window has room
+	// for, and it is what the frame is drawn from.
+	//
+	// Two arrays rather than one, because the clamp has to be undoable: fold it back into the asked-for width
+	// and a window that was briefly too narrow, the 80x24 fallback Init runs at included, keeps the pane at the
+	// minimum forever.
 	sidebars [panes]int
+	fitted   [panes]int
 	// drag is the divider being moved, nil when nothing is. It holds the width the pane started at rather than
 	// applying each motion to the last one, so a drag that leaves the clamp and comes back lands where the
 	// pointer is instead of where the clamping stopped it.
@@ -999,9 +1012,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) Model {
 		return m
 	case msg.Action == tea.MouseActionMotion && m.drag != nil:
 		drag := *m.drag
+		// The clamped value rather than where the pointer is, because a drag cannot ask for a width the window
+		// has no room for: what is asked for and what is drawn are the same thing here, which is why this is
+		// the one place the clamp is allowed to become the asked-for width.
 		m.sidebars[drag.resizing] = m.clampSidebar(drag.resizing,
 			drag.startWidth+drag.sign*(msg.X-drag.startX))
-		return m
+		return m.fitSidebars()
 	}
 	return m
 }

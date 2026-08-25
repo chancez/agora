@@ -990,6 +990,46 @@ func TestASavedWidthIsClampedToTheWindow(t *testing.T) {
 	}
 }
 
+// TestASavedWidthOutlivesAWindowItDoesNotFitIn is the bug as reported: a dragged roster came back at its
+// minimum on every reopen. The clamp used to be written back into the saved width, and Init applies the layout
+// before bubbletea reports a size, so it ran at the 80x24 fallback, where the roster is not a column at all and
+// clampSidebar leaves it 8. The real size arriving a moment later could not undo that, and 8 is what the next
+// release wrote to the file.
+//
+// The roster rather than the channels list because that is the column the bug could reach: at 80 columns a saved
+// channels width of 24 still fits, which is why the test that covered only the channels list passed throughout.
+func TestASavedWidthOutlivesAWindowItDoesNotFitIn(t *testing.T) {
+	want := config.Layout{Members: 30}
+	// withLayout before any WindowSizeMsg, which is the order Init runs it in.
+	m := New(testConfig(), func() time.Time { return now }).withLayout(want)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 22})
+
+	if got := m.Layout(); got != want {
+		t.Errorf("Layout() once the real size arrived = %+v, want %+v", got, want)
+	}
+	if got := m.paneWidth(paneMembers); got != 30 {
+		t.Errorf("the roster is %d wide, want the 30 that was saved:\n%s", got, boxed(m.View()))
+	}
+}
+
+// TestNarrowingAndWideningTheWindowGivesTheWidthsBack is the same root cause without a file: the clamp has to be
+// undoable, or a terminal that was briefly too narrow costs every width permanently.
+func TestNarrowingAndWideningTheWindowGivesTheWidthsBack(t *testing.T) {
+	want := config.Layout{Channels: 24, Threads: 30, Members: 30}
+	snapshot, messages := fullState()
+	m := testModel(160, 22, snapshot, messages).withLayout(want)
+	if got := m.Layout(); got != want {
+		t.Fatalf("Layout() at 160 columns = %+v, want %+v", got, want)
+	}
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 22})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 22})
+
+	if got := m.Layout(); got != want {
+		t.Errorf("Layout() back at 160 columns = %+v, want %+v", got, want)
+	}
+}
+
 // TestALongThreadNameCannotEatItsBadge is the bug as reported, from a screenshot: with the badge after the name,
 // a name as wide as the pane pushed it past the edge and truncation took it, so a column of threads said nothing
 // about which of them were unread. That is most of what the column is for.
