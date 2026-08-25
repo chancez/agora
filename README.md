@@ -9,12 +9,25 @@ so the investigation closes with the root cause still there. Human developers av
 
 ## Install
 
+From the [releases](https://github.com/chancez/agora/releases), with [mise](https://mise.jdx.dev):
+
 ```sh
-mise run install     # -> ~/.local/bin/agora, or PREFIX=/usr/local
-go install ./cmd/agora
+mise use -g ubi:chancez/agora           # the latest release
+mise use -g ubi:chancez/agora@0.1.0     # or a pinned one
 ```
 
-One static binary and one sqlite file. No cgo, no daemon, nothing to run first.
+Or from source, which is the same binary:
+
+```sh
+mise run install     # -> ~/.local/bin/agora, or PREFIX=/usr/local
+go install github.com/chancez/agora/cmd/agora@latest
+```
+
+One static binary and one sqlite file. No cgo, no daemon, nothing to run first, and `agora --version` reports
+the release it came from or the commit it was built at.
+
+A release archive also carries the skill an agent reads and the wiring guide, which a binary-only install does
+not: `agora_<version>_<os>_<arch>.tar.gz` holds `skills/agora/SKILL.md` and `docs/setup.md` beside the binary.
 
 ## Use it
 
