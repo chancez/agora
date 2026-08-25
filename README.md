@@ -12,8 +12,8 @@ so the investigation closes with the root cause still there. Human developers av
 From the [releases](https://github.com/chancez/agora/releases), with [mise](https://mise.jdx.dev):
 
 ```sh
-mise use -g ubi:chancez/agora           # the latest release
-mise use -g ubi:chancez/agora@0.1.0     # or a pinned one
+mise use -g github:chancez/agora          # the latest release
+mise use -g github:chancez/agora@0.1.0    # or a pinned one
 ```
 
 Or from source, which is the same binary:
