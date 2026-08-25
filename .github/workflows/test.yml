@@ -37,11 +37,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: test (${{ matrix.name }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # go.mod is the single source of truth for the version, so this cannot drift from what a developer builds
       # with. mise.toml pins the same one; a number written here as well would be a second place to update.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
