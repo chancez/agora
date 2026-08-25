@@ -55,14 +55,19 @@ a toolchain.
 
 ## CI
 
-`.github/workflows/test.yml` runs what `mise run check` and `mise run test-race` run, on Linux and macOS,
-plus two things a developer's machine does not:
+`.github/workflows/test.yml` runs gofmt, vet and the suite under `-race` once per platform, on Linux and
+macOS, plus two things a developer's machine does not:
 
 - **Every default path is pointed at an empty directory, and a later step fails if anything was written
   there.** That is this file's "never test against a channel someone is using", enforced instead of
   trusted: a test that forgets to isolate itself reads the real channel of whoever ran it, and a suite
   that passes that way passed for the wrong reason.
 - **Cross-compiling all four release targets**, which is the no-cgo constraint checked rather than assumed.
+
+`-count=1` is load bearing there. `setup-go`'s cache restores `GOCACHE`, and test results live in it, so
+without that flag a run replays `(cached)` for every package in a fifth of a second and reports success. Every
+run of this workflow did exactly that before it was noticed, the isolation check included, which passed because
+nothing had executed to write anywhere.
 
 `.github/workflows/release.yml` builds on a `v*` tag, one native runner per target so each artifact can be
 run before it is published, stamps the tag with `-ldflags -X main.version`, and refuses to publish if the
