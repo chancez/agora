@@ -40,9 +40,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -130,7 +130,7 @@ jobs:
           tar -czf "dist/$name.tar.gz" -C staging "$name"
           echo "artifact=$name.tar.gz" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.artifact }}
           path: dist/${{ steps.package.outputs.artifact }}
@@ -143,7 +143,7 @@ jobs:
       # The only job that needs write access, and it needs it to create the release.
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
