@@ -61,15 +61,24 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      # Every path agora resolves by default is pointed at an empty directory, and the step after this one checks
+      # One run, with -race. Claims and cursors are the two places two agents genuinely race, so the stricter
+      # run is the one worth having, and running the suite twice per platform bought little for double the time.
+      #
+      # -count=1 because otherwise this step runs nothing. setup-go's cache restores GOCACHE, which holds the
+      # test *result* cache, so a commit whose inputs match an earlier run replays four "(cached)" lines in a
+      # fifth of a second and reports success. That happened on every run of this workflow before this line
+      # existed, including the check below, which passed because nothing had executed to write anywhere. The
+      # module and build caches are still worth keeping; test results are not.
+      #
+      # Every path agora resolves by default is pointed at an empty directory, and the step after this checks
       # nothing was written there. A test that forgets to isolate itself otherwise reads and writes the real
-      # channel of whoever ran it, which on a developer's machine is a message another agent acts on and here
-      # would be a suite passing for the wrong reason. The project's own rule, enforced rather than trusted.
-      - name: go test
+      # channel of whoever ran it, which on a developer's machine is a message another agent acts on. The
+      # project's own rule, enforced rather than trusted.
+      - name: go test -race
         env:
           XDG_DATA_HOME: ${{ runner.temp }}/xdg-data
           XDG_CONFIG_HOME: ${{ runner.temp }}/xdg-config
-        run: go test ./...
+        run: go test -race -count=1 ./...
 
       - name: Check no test wrote to the default paths
         run: |
@@ -82,15 +91,6 @@ jobs:
             fi
           done
           echo "nothing wrote to the paths agora resolves by default"
-
-      # A separate run rather than the only run. -race widens real windows, and claims and cursors are the two
-      # places two agents genuinely race, so it is worth paying for. It also changes timing enough that a failure
-      # under it and one without it are different findings, and knowing which fired is the first triage question.
-      - name: go test -race
-        env:
-          XDG_DATA_HOME: ${{ runner.temp }}/xdg-data-race
-          XDG_CONFIG_HOME: ${{ runner.temp }}/xdg-config-race
-        run: go test -race ./...
 
       # Cross-compilation is the no-cgo claim, and it is what lets the release build every target from one
       # runner. Checked on Linux only, since building the same four targets twice proves nothing new.
