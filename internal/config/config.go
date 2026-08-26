@@ -6,6 +6,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,13 +27,25 @@ const (
 	// CLAUDECODE is also set in an IDE's integrated terminal, where the person is typing, and the
 	// session id is not.
 	EnvClaudeSession = "CLAUDE_CODE_SESSION_ID"
+	// EnvCodexThread is Codex's thread id, which it injects into the environment of every shell command
+	// the model runs, and which is the same id a Codex hook event carries as its session_id.
+	EnvCodexThread = "CODEX_THREAD_ID"
+	// EnvAgent names the harness, and only decides the prefix on a name derived from a session id. It is
+	// for a hook, which is handed a session_id by an event and need not have the harness's own session
+	// variable in its environment: Claude Code sets one there and Codex promises nothing. A hook that
+	// resolves a different name than the agent's own commands do splits one session into two members,
+	// which is worse than either name, so the Codex wiring in docs/setup.md sets this.
+	EnvAgent = "AGORA_AGENT"
 	// EnvUser names the person at the keyboard.
 	EnvUser = "USER"
 )
 
-// agentName prefixes a name agora derived from an agent's session id, so a roster says at a glance
-// which members are agents and which is the person.
-const agentName = "claude"
+// The harnesses agora recognises, used to prefix a name derived from a session id so a roster says at a
+// glance which members are agents, which harness each is, and which is the person.
+const (
+	claudeAgent = "claude"
+	codexAgent  = "codex"
+)
 
 // Sources a value can come from, as reported by agora config.
 const (
@@ -42,6 +56,7 @@ const (
 	SourceWorkingDir   = "working directory"
 	SourceWorktreeName = "worktree name"
 	SourceAgentSession = "$" + EnvClaudeSession
+	SourceCodexThread  = "$" + EnvCodexThread
 	SourceUserName     = "$" + EnvUser
 	SourceHookEvent    = "hook event"
 )
@@ -229,10 +244,16 @@ func resolveMember(flags Flags, env envFunc, inherited func(string) (string, boo
 	} else if ok {
 		return Value{Value: value, Source: "$" + EnvMember}, nil
 	}
+	// Resolved here rather than inside the branch that uses it so that an empty $AGORA_AGENT is refused on
+	// every command that could have wanted it, the same as an empty $AGORA_MEMBER.
+	agent, err := resolveAgent(env, inherited)
+	if err != nil {
+		return Value{}, err
+	}
 	// A hook event names the session it is about, which is not always the session the process was spawned
 	// from. The case this exists for is SessionEnd: the identity that is ending is the one in the event.
 	if flags.SessionID != "" {
-		return Value{Value: sessionName(flags.SessionID), Source: SourceHookEvent}, nil
+		return Value{Value: sessionName(agent, flags.SessionID), Source: SourceHookEvent}, nil
 	}
 	// The session, which is the unit identity should follow: it survives compaction, and two agents are two
 	// sessions even in one directory. Not a pid, which changes per invocation and would mean a new member per
@@ -240,8 +261,18 @@ func resolveMember(flags Flags, env envFunc, inherited func(string) (string, boo
 	//
 	// Shortened because people read it, in a claim refusal and in the roster, where a bare uuid says nothing.
 	// The worktree is recorded separately.
+	//
+	// Codex first, and only because of what each variable proves when both are set. Codex injects its thread
+	// id per command it runs, so seeing it means this process is a Codex tool call; Claude Code's is exported
+	// into a shell, so any descendant inherits it, and Codex passes the whole environment through by default.
+	// So running codex inside a Claude Code session leaves both set, and the codex one is the true answer. The
+	// mirror image, a Claude Code session started from inside a Codex tool call, is the case this gets wrong,
+	// and $AGORA_MEMBER is the fix for it.
+	if value, ok := inherited(EnvCodexThread); ok {
+		return Value{Value: sessionName(codexAgent, value), Source: SourceCodexThread}, nil
+	}
 	if value, ok := inherited(EnvClaudeSession); ok {
-		return Value{Value: sessionName(value), Source: SourceAgentSession}, nil
+		return Value{Value: sessionName(claudeAgent, value), Source: SourceAgentSession}, nil
 	}
 	// Nobody's agent, so somebody's terminal.
 	if value, ok := inherited(EnvUser); ok {
@@ -252,11 +283,38 @@ func resolveMember(flags Flags, env envFunc, inherited func(string) (string, boo
 	return Value{Value: filepath.Base(worktree), Source: SourceWorktreeName}, nil
 }
 
-// sessionName shortens a session id to something a person can read in a roster.
-func sessionName(id string) string {
-	short := []rune(id)
-	if len(short) > 8 {
-		short = short[:8]
+// resolveAgent names the harness whose session id a hook event carried, since the id alone does not say.
+// $AGORA_AGENT is the answer when it is set, then whichever harness variable the hook's own environment has.
+func resolveAgent(env envFunc, inherited func(string) (string, bool)) (string, error) {
+	if value, ok, err := env(EnvAgent); err != nil {
+		return "", err
+	} else if ok {
+		return strings.TrimSpace(value), nil
 	}
-	return agentName + "-" + string(short)
+	if _, ok := inherited(EnvCodexThread); ok {
+		return codexAgent, nil
+	}
+	// Claude Code last and unconditionally, rather than only when its variable is set: it is what every
+	// existing member in every existing channel was named after, and a harness agora cannot identify is not a
+	// reason to rename them all.
+	return claudeAgent, nil
+}
+
+// sessionName shortens a session id to something a person can read in a roster: the harness, and eight hex
+// digits of a hash of the id.
+//
+// A hash rather than a slice of the id itself, because agora cannot know how the next harness builds an id and
+// the failure is silent. Slicing worked for Claude Code, whose session id is a v4 uuid and random throughout,
+// and broke on the first harness that did anything else: a Codex thread id is a v7 uuid, so its leading digits
+// are a millisecond timestamp and the first eight only change about once a minute. Measured while running
+// scripts/codex-hook-experiment.sh, where two arms started 90 seconds apart were both codex-01a03b15 and
+// therefore shared a member row, a read cursor and a claim, which is the failure a session id was chosen to
+// prevent. Any id whose structure lives at either end has that bug waiting in it, and a hash has no ends.
+//
+// What it costs is the thing a slice was good for: a name no longer contains any part of the id, so a member
+// cannot be matched by eye to a session in a transcript or a hook payload. Two digits fewer than a uuid's worth
+// of collision resistance, too, though 32 bits against a roster of tens is not the risk that matters here.
+func sessionName(agent, id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return agent + "-" + hex.EncodeToString(sum[:])[:8]
 }
