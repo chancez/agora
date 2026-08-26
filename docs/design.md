@@ -956,6 +956,26 @@ Four decisions, and the first two came out of the measurement rather than from t
   message that did it goes with it, but the question a reader has is "where is the other half", and that has no
   direction.
 
+**And it changed nothing an agent did.** `scripts/link-experiment.sh` plants the finding in a thread the member
+has already read, so the briefing cannot name it, and a pointer to it in an unread thread that the briefing does
+deliver. One turn, fix the narrow symptom, three sites carrying one root cause. Three runs an arm:
+
+| arm | all three sites | 2 of 3 | Parse alone | read the far thread |
+| :-- | :-- | :-- | :-- | :-- |
+| before, the pointer as prose | 2 of 3 | 1 of 3 | 0 of 3 | 3 of 3 |
+| after, the pointer recorded | 1 of 3 | 2 of 3 | 0 of 3 | 3 of 3 |
+
+**Every arm followed the pointer, 6 of 6, and no arm patched Parse alone.** The prose was enough, which is the
+outcome this was expected to have and the reason the expectation was written into the script before it ran: the
+briefing quotes the message carrying the pointer, so both arms are told the name and the link adds structure
+rather than reach. The site counts differ the wrong way for the change and n is 3, so that is noise.
+
+By the standard that removed the post-time notice, the honest state of links is: a capability with a null against
+the case measured, kept only for the case that has not been. That case is a pointer nothing quotes, which a long
+channel produces on its own: the reference was message 3 of a thread whose unread starts at message 8, so nothing
+in context names the far thread and `related` is the only route to it. Measuring that means burying the pointer in
+an already-read message, and until it is measured this is a feature resting on a mechanism.
+
 **Following a link is not reading it.** `agora read --thread X` names the related threads and what is unread in
 each, and touches no cursor but X's. Advancing them would be convenient for exactly the reason it is wrong:
 `read` shows and `--advance` consumes because the failures are asymmetric, and a call that consumed a thread
