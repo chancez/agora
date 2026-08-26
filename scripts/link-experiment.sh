@@ -13,7 +13,7 @@
 # pointer exists for. An agent triaged a thread as not its own, then started work that turns out to be exactly
 # that thread's subject.
 #
-#   lexer-panic    the root cause, and a claim on it. Read already, so the briefing will not mention it.
+#   lexer-panic    the root cause, and no claim on it. Read already, so the briefing will not name it.
 #   parser-panic   unread, and it names lexer-panic in prose, so the briefing does deliver this one.
 #
 # The task is the narrow symptom. parser.go, lex.go and format.go all index strings.Fields()[0] with no length
@@ -43,8 +43,12 @@
 # which is checked per run and printed, not reasoned about. It caught a claim: agora reports standing claims on
 # SessionStart with their notes and paths, so a claim covering all three files handed every arm the answer.
 #
-# Everything Codex needs is copied from scripts/thread-experiment.sh, including its four traps. This spawns real
-# Codex sessions and costs tokens, and never opens the real channel.
+# One trap of its own, and it cost six minutes of a run staring at nothing: **codex exec reads stdin when it is
+# not a terminal**, and blocks on "Reading additional input from stdin..." until it closes. Same shape as the note
+# in AGENTS.md about running `agora inject </dev/null`, and both scripts here now redirect it.
+#
+# Everything else Codex needs is copied from scripts/thread-experiment.sh, including its four traps. This spawns
+# real Codex sessions and costs tokens, and never opens the real channel.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -273,7 +277,7 @@ EOF
   if ! ( cd "$repo" && CODEX_HOME=$home HOME=$dir/fakehome ZDOTDIR=$dir/zdotdir \
       PATH="$dir/bin:$PATH" AGORA_DB=$db AGORA_MEMBER=$member AGORA_CHANNEL=$channel AGORA_AGENT=codex \
       codex exec --json --dangerously-bypass-hook-trust "$TASK" \
-      > "$dir/out.json" 2> "$dir/err.txt" ); then
+      < /dev/null > "$dir/out.json" 2> "$dir/err.txt" ); then
     echo "  INVALID: codex exited nonzero"
     sed 's/^/    /' "$dir/err.txt" | head -5
     echo invalid > "$dir/invalid"

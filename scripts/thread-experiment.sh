@@ -326,7 +326,7 @@ EOF
     fi
     if ! ( cd "$repo" && CODEX_HOME=$home HOME=$dir/fakehome ZDOTDIR=$dir/zdotdir \
         PATH="$dir/bin:$PATH" AGORA_DB=$db AGORA_MEMBER=$member AGORA_AGENT=codex \
-        codex "${codex_args[@]}" "$prompt" > "$dir/turn$turn.out" 2> "$dir/turn$turn.err" ); then
+        codex "${codex_args[@]}" "$prompt" < /dev/null > "$dir/turn$turn.out" 2> "$dir/turn$turn.err" ); then
       echo "  INVALID: codex exited nonzero on turn $turn"
       sed 's/^/    /' "$dir/turn$turn.err" | head -5
       echo invalid > "$dir/invalid"
