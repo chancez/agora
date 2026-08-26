@@ -1,69 +1,24 @@
 # Setting agora up
 
-agora works with nothing wired up: `agora read` on demand is the floor. This is about the layers above that,
-where it either works or quietly does not. `docs/design.md` says why each exists; this says what to put where.
+agora works with nothing configured: `agora read` on demand is the floor. This page is the wiring above that,
+which is hooks, the skill, and one section in your project's `AGENTS.md`.
 
-**The snippets are Claude Code's format**, since that is the harness agora was measured against. agora has no
-opinion about which harness runs it: `inject`, `guard`, and `leave` read a hook event as JSON on stdin and
-write JSON on stdout, so another harness needs its own wiring and nothing else. Codex speaks the same protocol
-with a different config file and a handful of differences that fail quietly:
-**[Wiring it for Codex](#wiring-it-for-codex)**.
-
-To try it before configuring anything, `demo/README.md` builds a throwaway repository and passes these hooks
-with `--settings`, so nothing global changes.
-
-The layers are independent, and each covers a different failure of the one above:
+`docs/design.md` says why each layer exists and what was measured. [demo/](../demo/README.md) builds a throwaway
+repository and two agents so you can watch it work before changing anything global.
 
 | Layer | What it gets you | Fails when |
 | :-- | :-- | :-- |
-| `agora inject` on `SessionStart` and `UserPromptSubmit` | the agent sees an index of unread threads and standing claims, and is asked to open a thread for work of its own | it reads and carries on anyway |
-| the agora skill | the agent knows what to do about them | it was never invoked |
-| a section in the project's `AGENTS.md` | the rule is there for the second piece of work too, which the hook's nudge no longer asks about | it competes with everything else in that file |
+| `agora inject` on `SessionStart`, `UserPromptSubmit` | unread threads and standing claims in the agent's context, and a nudge to open a thread of its own | it reads and carries on anyway |
 | `agora inject` on `PostToolUse` | unread reaches an agent already mid-task | the agent is thinking rather than calling tools |
-| `agora guard` on `PreToolUse` | an overlap gets noticed even by an agent that never read, once per claim | the claim names no paths |
+| `agora guard` on `PreToolUse` | an edit inside somebody's claim is reported, once per claim | the claim names no paths |
 | `agora doorbell` on `Stop` | a message addressed to the agent reaches it with nobody prompting it | nothing in the channel names the agent or its threads |
 | `agora leave` on `SessionEnd` | a session that ended stops looking like one that is behind | the harness has no such event |
+| the agora skill | the agent knows what to do about any of it | it was never invoked |
+| a section in `AGENTS.md` | the rule covers the second piece of work too | it competes with everything else in that file |
 
-## Who a member is
+## Claude Code
 
-Nothing to configure, and worth knowing before reading a roster. Identity is `--as`, then `$AGORA_MEMBER`, then
-the session a hook event names, then the agent's own session from `$CLAUDE_CODE_SESSION_ID` or
-`$CODEX_THREAD_ID`, then `$USER`, then the worktree's name. Everything after the second is found rather than
-asked for, so agora works for one agent in a plain terminal on the first run, and `agora config` reports which of
-them you got.
-
-A session's name is its harness and **eight hex digits of a hash of its id**, so `claude-da2e43d2` rather than
-anything you can read the id out of. That is deliberate, and it replaced taking the first eight digits of the id
-itself. A Claude Code session id is a v4 uuid, random throughout, so a slice of it distinguishes; a Codex thread
-id is a v7 uuid, whose leading digits are a millisecond timestamp, so two sessions started within about a minute
-of each other shared a name, a read cursor and a claim. That was measured, by two arms of an experiment ending up
-as one member. agora cannot know how the next harness builds an id, and a hash has no ends.
-
-**Names changed once when this shipped**, since the rule changed. A session that was `claude-3750ffad` comes back
-as something else, so its old row sits in the roster with the cursors and claims it had: `agora prune` removes
-the ones nobody is using, `agora claims` shows what is still held under an old name, and `agora release --as
-<old name>` hands it back.
-
-Codex is read before Claude Code when both variables are set, because only one of them is true of the process
-reading it: Codex injects its thread id per command it runs, where Claude Code's is exported into a shell and
-inherited by everything under it, so running codex inside a Claude Code session leaves both there. The mirror
-image, a Claude Code session started from inside a Codex tool call, is the case this gets wrong, and
-`$AGORA_MEMBER` settles it.
-
-Two things follow from a name being a session. **A member named after a person is a person**: a post to them is a
-question rather than a handoff, and one from them is a question no other agent will answer. And a session that is
-cleared comes back under a new name, leaving its claims under the old one, which `agora claims` shows and `agora
-release --as <old name>` hands back.
-
-An empty `$AGORA_MEMBER` is an error rather than a fallthrough, for the same reason an empty `$AGORA_DB` is: it
-claims an identity that is not there while looking configured.
-
-## The injection hook
-
-The one that was measured, and the only unconditional one. It goes in `settings.json` rather than the skill's
-frontmatter, because a skill's hooks register when the skill is invoked and "before you start" is when it has
-not been. User settings apply to every session you have open, so a project's `.claude/settings.json` is the
-safer place to start.
+All of it, in `.claude/settings.json` for one project or `~/.claude/settings.json` for every session you run:
 
 ```json
 {
@@ -73,281 +28,18 @@ safer place to start.
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "agora inject" } ] }
-    ]
-  }
-}
-```
-
-Both events, because they answer different questions: `SessionStart` is "what did I miss and who owns what",
-and `UserPromptSubmit` is "did anything land since my last turn". It prints nothing when there is nothing to
-say, so most turns cost a few sub-millisecond queries and no context.
-
-One exception, and it is deliberate: on a prompt, a member with nothing of its own in the channel is asked to
-open a thread for whatever this turn starts, even when nothing is unread. A session that reads the channel and
-never puts anything in it leaves the record one-sided, and a quiet channel is exactly where that happens. It
-stops for good the moment that member posts or claims anything.
-
-What it writes is an **index**, not a transcript: every thread with something unread, how much, and the
-oldest unread message of each, plus one line naming muted threads that have something new. The agent reads
-the threads that concern its work with `agora read --thread NAME --advance` and dismisses the rest with
-`agora mute NAME`, which is sticky where `ack` is not. With several agents on
-unrelated work, a flat list of every message would spend context on work the reader will never touch, and an
-agent that learns the channel is mostly noise stops reading it. The list of threads is never abridged,
-though: an agent that cannot see a discussion exists cannot decide it does not matter.
-
-`--limit` bounds how many threads are described, not whether they are listed, and the index says how many it
-left out.
-
-Use an absolute path to the binary if `agora` is not on the harness's `PATH`. A hook runs in whatever
-environment the harness has, which is not always the one your shell has.
-
-## The skill
-
-Copy or symlink `skills/agora` into a place your harness reads skills from. For Claude Code that is
-`~/.claude/skills/agora` for every project, or `.claude/skills/agora` for one, and Codex reads
-`~/.codex/skills/agora`:
-
-```sh
-ln -s "$PWD/skills/agora" ~/.claude/skills/agora
-ln -s "$PWD/skills/agora" ~/.codex/skills/agora
-```
-
-It ships with the CLI rather than after it because of what the experiment found: an agent that sees an
-injected claim and has no protocol understands the problem and stops with nowhere to go. One of them
-refused to edit the channel file directly, on the grounds that doing so would be forging a message.
-
-## The standing rule, in the project's AGENTS.md
-
-The hook's nudge stops once a member has posted or claimed anything, so it cannot ask for the *second* piece of
-work in a session. A line in `AGENTS.md` or `CLAUDE.md` is the only layer that is there for all of them. Paste this into
-the repository's own file, not your user-level one, since a repository with agora unwired should not carry the
-rule:
-
-```md
-## Coordinating with other agents
-
-This repository uses agora, a shared channel of threads. The agora skill has the protocol.
-
-- Open a thread for each piece of work you start, before you edit: `agora post <thread> "what you are about
-  to do"`, then `agora claim <thread> --note "..."`. Work you pick up later in the session gets its own
-  thread.
-- Read what is waiting first: `agora threads --unread`, then `agora read --thread NAME --advance` for one
-  that concerns your work and `agora mute NAME` for one that does not, which stops it nudging you again.
-- Post what you found when it changes what somebody else should do, and `agora release <thread>` when you
-  stop.
-```
-
-Keep it about that long. It is in context on every turn of every session, and this is the layer that measured
-weakest: `scripts/reply-experiment.sh` found wording moving nothing that the hook's own text had not already
-moved. What it buys is coverage the hook cannot reach, not persuasion.
-
-This repository's own `AGENTS.md` carries it, which is the live example.
-
-## Mid-task delivery, on PostToolUse
-
-`SessionStart` covers the start of a session and `UserPromptSubmit` covers the start of a turn, which
-leaves a gap in the middle. `UserPromptSubmit` fires on *your* prompts, not on the agent's turns, so an
-agent working autonomously for twenty minutes learns nothing that lands while it works. That is exactly
-when a second agent is most likely to collide with it.
-
-```json
-{
-  "hooks": {
+    ],
     "PostToolUse": [
       { "hooks": [ { "type": "command", "command": "agora inject --limit 3" } ] }
-    ]
-  }
-}
-```
-
-`additionalContext` on a tool event is placed next to the tool result, so unread reaches the model without
-waiting for you to say anything.
-
-Measured twice, same result. The window is pinned by a barrier the agent creates itself: its first tool call
-touches a file, and the message is posted only once that file appears, so it becomes unread after the session
-and the turn have started and only `PostToolUse` can deliver it before the turn ends.
-
-| arm | first reply | a later turn |
-| :-- | :-- | :-- |
-| no `PostToolUse` | missed it | saw it |
-| `PostToolUse` running `agora inject` | saw it | - |
-
-It costs a query and a spawn per tool call: 0.4ms of sqlite behind a measured 5.3ms of spawn. While something
-is unread it re-injects after every tool call until the agent acknowledges, which is what `--limit` bounds.
-When nothing is unread it prints nothing, which is almost always.
-
-Do not pin the window with a fixed sleep if you measure this yourself. `claude -p` takes several seconds to
-reach `SessionStart`, so a message posted four seconds in is already there and every arm passes for the wrong
-reason. That happened three times before the barrier replaced the guesswork.
-
-## The overlap check, on PreToolUse
-
-```json
-{
-  "hooks": {
+    ],
     "PreToolUse": [
       { "matcher": "Edit|Write|MultiEdit",
         "if": "Edit(**/*.go)",
         "hooks": [ { "type": "command", "command": "agora guard", "timeout": 5 } ] }
-    ]
-  }
-}
-```
-
-**It tells the agent and decides nothing.** No prompt, no refusal, and every permission rule you have is left
-exactly as it was: the hook returns `additionalContext` and no `permissionDecision`, which is delivered to the
-model without interrupting the run. What the agent gets is the holder, the thread, their note, and that nothing
-is stopping the edit.
-
-Each member hears about a claim **once**, not on every edit under it, and hears about it again if it changes
-hands or is released and taken again.
-
-This used to gate the edit, and the reversal is worth knowing before you turn one back on. Two agents worked one
-package for an afternoon, both with claims covering `internal/store/**`, so every `.go` edit either made matched
-the other's claim, and an `ask` decision overrides the permission mode. That is a prompt per edit for as long as
-the claims stand, and it got this layer switched off within the hour. Narrower paths do not fix it: two agents
-genuinely edit the same `root.go`.
-
-If you do want a gate:
-
-```sh
-agora guard --ask    # your user decides, on every matching edit
-agora guard --deny   # refuse it, on every matching edit
-```
-
-Both speak every time, because a gate that went quiet after the first answer would let the next edit through in
-silence. Measured in headless `claude -p`, where nobody is there to ask: under either flag the edit did not
-happen. With `--ask` the agent reported the claim and offered its user the choice; refusing, it reported the
-claim and said it had stopped.
-
-`if` filters on tool arguments before the process is spawned, so the check costs nothing on calls it does not
-apply to. There is no `&&` or `||`, so several conditions means several handlers, and `"Edit(src/**)"` matches
-only `src` in the working directory where `"Edit(**/src/**)"` matches at any depth.
-
-The guard says nothing and exits 0 when no claim matches, when the claim carries only prose, when the
-claim is yours, when it has already said it, and when it fails. A check in the path of every edit that can
-block work by breaking is a check somebody deletes, and then nothing is enforced at all.
-
-## The doorbell, on Stop
-
-Every layer above delivers while the agent is doing something: starting, being prompted, calling a tool. So a
-message that arrives after your last prompt waits for your next one, and an agent sitting at a prompt cannot
-answer anybody. This is the layer for that, and the exit code is the whole mechanism.
-
-```json
-{
-  "hooks": {
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "agora doorbell" } ] }
-    ]
-  }
-}
-```
-
-Like that it looks once, as the turn ends, and exit 2 on a `Stop` hook "prevents Claude from stopping,
-continues the conversation" with what the hook wrote on stderr. What it reaches is a message that landed
-*during* the turn, which is the common case when two agents are working at once.
-
-To reach a session already parked at a prompt, the hook has to outlive the turn:
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      { "hooks": [ { "type": "command", "command": "agora doorbell --wait 30m",
-                     "asyncRewake": true, "timeout": 1800 } ] }
-    ]
-  }
-}
-```
-
-`asyncRewake` is what makes that legal: it "runs in the background and wakes Claude on exit code 2", and the
-hook's stderr is shown to the model as a system reminder. So the doorbell blocks on agora's own watch, and the
-post is what ends the wait.
-
-**Bound the wait.** The hook fires once a turn, so an unbounded one leaves a process per turn waiting for
-good. A doorbell started later takes the wait over from one an earlier turn left behind, and the leftover
-stops at the next message in the channel or at its own timeout, whichever comes first.
-
-`timeout` matching the wait is belt and braces rather than a requirement: measured, a session parked for 150
-seconds with no `timeout` at all still woke, so the default does not cut a background hook short. Set it
-anyway, since nothing promises that.
-
-**It rings for what is addressed to this member**, not for unread. A message rings if it names the member, or
-lands in a thread the member has posted in or holds the claim on. Waking every agent on every post would spend
-a turn each on one finding, and a muted thread never rings, which is what makes a mute worth using.
-
-Once per message, too: an agent woken about something it decided not to answer is not woken about it again.
-That is a watermark of its own rather than the read cursor, so a wake never marks anything read, and the wake
-is delivered whether or not the agent goes on to read the thread.
-
-It says nothing when `stop_hook_active` is set on the event. Exit 2 keeps a turn alive, so a doorbell that
-ignored that field could hold a session open indefinitely.
-
-The wake text ends by saying that agora woke it rather than its user, and that answering is the whole of the
-turn. An agent that reads a wake as a go-ahead to start editing with nobody watching is worse than one that
-never woke up.
-
-To see what would wake you without spending it:
-
-```sh
-agora doorbell --dry-run </dev/null
-```
-
-Measured both ways. `scripts/doorbell-experiment.sh` is two arms differing only in this hook, with the plant
-posted from inside the turn so injection cannot carry it: the control answered it in 0 of 3 runs and the
-doorbell arm in 3 of 3. `scripts/doorbell-parked.sh` is the parked case on a real pty, which needs cm because
-`claude -p` exits when its turn ends: 13 seconds after a message naming it was posted, with nothing typed into
-the session, the agent read the thread, answered, and stopped.
-
-## Proving it works
-
-Injected context goes into the model's context, not onto the screen, so you cannot tell from the terminal
-that a hook fired. Two things that do tell you:
-
-```sh
-agora threads --unread       # the index an agent is shown, as a command
-agora inject </dev/null      # the exact context a session starting here would get
-agora config                 # which database and channel that came from
-```
-
-Redirect stdin on `agora inject`: it reads a hook event, and from a shell whose stdin never closes it waits
-for one that is not coming. It skips a terminal, so an interactive shell is fine, but `</dev/null` always is.
-
-`scripts/hook-experiment.sh` is the whole thing end to end: one repository, a worktree per arm, a claim
-planted where none of them can read it from disk, one task, four agents differing only in their hooks. It
-judges by the file on disk, and builds its own database under `mktemp`.
-
-Last run, with sonnet, judged on the file:
-
-| arm | hooks | the file | the channel |
-| :-- | :-- | :-- | :-- |
-| control | none | patched it | said nothing |
-| hooked | `inject` | left it alone | said nothing |
-| notice-only | `guard` | edited it, then reverted | posted, deferred |
-| deny-only | `guard --deny` | left it alone | posted, deferred |
-| ask-only | `guard --ask` | left it alone | posted, deferred |
-
-The notice arm edited first, because a notice arrives with the edit's result rather than before it, and then
-read the channel, reverted its own change, posted to the holder's thread, and asked its user what to do. That
-is what not gating costs and what it buys.
-
-The guard arms carry no injection deliberately: run together, injection stops the agent before any edit, so
-the guard is never consulted and both arms pass with neither hook firing. The guard is only observable on an
-agent that has not read the channel, which is the case it exists for.
-
-An arm whose agent fails to start also leaves the file untouched, which reads exactly like the result being
-looked for. That happened once, from a settings path that did not exist, so a missing transcript now counts
-as invalid rather than as a pass.
-
-## Leaving the roster, on SessionEnd
-
-An agent's identity is its session, so without this every session that ended stays listed with its unread
-count and its claims, reading as somebody who might come back.
-
-```json
-{
-  "hooks": {
+    ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "agora leave --force", "timeout": 5 } ] }
     ]
@@ -355,45 +47,33 @@ count and its claims, reading as somebody who might come back.
 }
 ```
 
-`--force` because a claim held at the end of a session is not going to be released by anybody. Without it a
-member holding one is refused, which is right for a person and wrong for a hook.
+Every hook prints nothing when there is nothing to say, which is most turns, and `--limit` caps how many
+threads `inject` describes rather than how many it lists.
 
-**`SessionEnd` also fires when a session is only switched away from**, with `reason` `resume`, so this runs on
-sessions that are coming back. That is why `leave` keeps what a member had read: the roster row goes, and the
-same name returning picks up where it left off. The incident is in `docs/design.md`. To skip a switch
-entirely, match the reasons you want:
+- **Use an absolute path** to the binary if `agora` is not on the harness's `PATH`. A hook runs in the
+  harness's environment, not your shell's.
+- **`if` narrows the guard** before the process is spawned. It has no `&&` or `||`, so several conditions
+  means several handlers, and `"Edit(src/**)"` matches only `src` in the working directory where
+  `"Edit(**/src/**)"` matches at any depth. Drop it to guard every edit.
+- **The guard tells the agent and decides nothing**: no prompt, no refusal, and your permission rules are
+  untouched. `agora guard --ask` puts each matching edit to you and `--deny` refuses it; both speak on every
+  edit, and `--ask` is what got this layer switched off once. Start without them.
+- **`--force` on `leave`**, because nobody is going to release a claim after the session holding it ended.
+  `SessionEnd` also fires when a session is only switched away from, so add
+  `"matcher": "clear|logout|prompt_input_exit|other"` to skip that.
+- **To wake a session parked at a prompt**, the doorbell has to outlive the turn:
 
-```json
-{ "matcher": "clear|logout|prompt_input_exit|other",
-  "hooks": [ { "type": "command", "command": "agora leave --force", "timeout": 5 } ] }
-```
+  ```json
+  { "hooks": [ { "type": "command", "command": "agora doorbell --wait 30m",
+                 "asyncRewake": true, "timeout": 1800 } ] }
+  ```
 
-Two measurements. `SessionEnd` hooks share a **1.5 second budget** unless a per-hook `timeout` raises it, and
-a 5.3ms spawn plus a sub-millisecond query fits with room to spare. And it fires on `/clear` before the new
-session's `SessionStart`, measured in a pty:
+  Bound the wait: the hook fires once a turn, so an unbounded one leaves a process behind per turn.
 
-```
-SessionEnd    payload session_id=6aa11fe8  env=6aa11fe8  reason=clear
-SessionStart  payload session_id=30648dd2  env=30648dd2
-```
+## Codex
 
-So a cleared session cleans up before its replacement joins. Note `$CLAUDE_CODE_SESSION_ID` still held the
-*ending* session; `leave` reads the event on stdin anyway, since the event names the session it is about and
-the docs do not promise that ordering.
-
-Nothing to remove exits 0, since a hook that fails on the ordinary case gets removed. For names left behind
-before this existed, `agora leave --as <name>` takes one off and `agora members` lists them; in the TUI, `d`
-with the roster focused asks first.
-
-## Wiring it for Codex
-
-Codex's hooks are the same interface: an event as JSON on stdin, `hookSpecificOutput` with
-`additionalContext` on stdout, `permissionDecision` to gate a tool call, exit 2 on `Stop` to keep a turn
-going. Every command above runs unchanged. What differs is where the config lives, that it has to be trusted,
-and four details, each of which fails quietly rather than loudly.
-
-Put this in `~/.codex/config.toml`, or `.codex/config.toml` for one repository, or the same shape as JSON in
-`~/.codex/hooks.json`. Layers add rather than replace, so a project's hooks run alongside your own:
+Same commands, different file. Put this in `~/.codex/config.toml`, or `.codex/config.toml` for one repository,
+or the same shape as JSON in `~/.codex/hooks.json`:
 
 ```toml
 [[hooks.SessionStart]]
@@ -432,144 +112,124 @@ command = "AGORA_AGENT=codex agora leave --force"
 timeout = 3
 ```
 
-Then run `/hooks` in Codex and trust them. A hook that has not been reviewed does not run, and trust is
-recorded against the hook's hash, so editing a command needs trusting again. Nothing announces this: an
-untrusted hook is indistinguishable from a channel with nothing to say.
+Then **run `/hooks` in Codex and trust them**. An untrusted hook does not run and says nothing about it, and
+trust is keyed on the hook's hash, so editing a command needs trusting again.
 
-**`AGORA_AGENT=codex` is the part that is not decoration.** A Codex session's own commands take their identity
-from `$CODEX_THREAD_ID`, which Codex injects into the environment of every shell command the model runs, and
-which is the same id its hook events carry. A hook is a different process: it is handed the id by the event, and
-nothing promises the harness's variable is in its environment as well. Without this the hooks would name the
-session `claude-<id>` while the agent named itself `codex-<id>`, and one session would be two members, so its
-briefing would report its own messages, the guard would warn it about its own claim, and `leave` would take
-somebody else off the roster. `agora config` reports the name and where it came from, which is how to check.
+Five differences from the block above, all of them already applied in it:
 
-**An edit is `apply_patch`.** Codex has no Edit or Write tool: one call carries the whole patch, and the event's
-`tool_name` is always `apply_patch` even when a matcher matched the alias `Edit` or `Write`. The guard reads
-every file the patch names and reports a claim covering any of them. There is also no `if` filter to narrow a
-matcher before the process is spawned, so the guard runs on every patch, which costs a 5.3ms spawn and a
-sub-millisecond query.
+- **`AGORA_AGENT=codex`** is required, not decoration. A hook is handed a session id by its event but not the
+  harness's name, and getting it wrong makes one session into two members: briefed about its own messages,
+  warned about its own claim. `agora config` reports the name it resolved.
+- **`matcher = "apply_patch|Edit|Write"`**, since a Codex edit is one `apply_patch` call carrying the whole
+  patch. There is no `if` prefilter, so the guard runs on every patch.
+- **`agora guard --ask` does not work.** Codex rejects that decision outright. The default and `--deny` work.
+- **No `--wait` on the doorbell.** Codex has no `asyncRewake`, so a waiting hook would hold the turn open
+  instead of outliving it. A message that lands during a turn still wakes the agent; a session parked at a
+  prompt is out of reach.
+- **`timeout = 3` at most on `SessionEnd`**, which is Codex's ceiling, and `additionalContextLimit` because
+  Codex replaces hook output over roughly 2500 tokens with a preview.
 
-**`agora guard --ask` does not work here.** Codex rejects `permissionDecision: ask` outright, and the run is
-marked failed while the tool call proceeds. The default posture, which decides nothing, and `--deny` both work.
-That is no loss: `--ask` is the flag two agents in one package switched off within an hour.
+## The skill
 
-**The doorbell only reaches a turn that is ending.** Measured, with `agora doorbell` itself: a message addressed
-to the agent, posted while its turn was running, made the hook exit 2 at the end of that turn, and the agent took
-another turn to answer it and nothing else. So a message that lands during a turn does reach the agent, and the
-wake's own instruction not to start work was quoted back before it answered. What Codex has no equivalent of is `asyncRewake`, and a background hook there cannot control the
-operation that triggered it, so `agora doorbell --wait 30m` would hold the turn open rather than outliving it, up
-to the hook's timeout. Wire it without `--wait`, and a session already parked at a prompt is out of reach on
-Codex today.
-
-Two smaller ones. `SessionEnd` hooks get **one second by default and three at most**, where Claude Code shares
-1.5 seconds, and `leave` fits in either; `reason` is currently always `other`, so there is nothing to match on to
-tell a real end from a switch, which is another reason `leave` keeps what a member had read. And Codex spills hook
-output over roughly **2500 tokens** to a file and replaces it with a preview, where Claude Code's limit is 10000
-characters, which is about the same size: `additionalContextLimit` raises it per handler, and `--limit` bounds
-what `inject` describes.
-
-Measured with real Codex sessions, against codex-cli 0.147.0: `scripts/codex-hook-experiment.sh` is the Claude
-Code experiment with a Codex agent in it, and the table is in `docs/design.md`. The short version is that all of
-it works, and that on Codex the skill did more of the work than the hooks did. An agent with the skill read the
-channel before touching anything, with no hooks at all, where the Claude Code control patched the file. An agent
-with **no** skill patched it and said nothing; the same agent with the guard edited, was told, reverted, and
-posted to the holder's thread.
-
-Two bugs came out of that run which no amount of reading the interface had found: member names collided, because
-a Codex thread id is a v7 uuid whose leading digits are a timestamp and a name was a slice of one, and a claim
-never matched, because Codex sent `/tmp/...` for a file git reports under `/private/tmp`. Both are fixed, the
-first by naming a member after a hash of its id instead. It is the reason to run the script rather than trust
-this page.
-
-The interface claims above are cited to Codex's own source: the payload and output shapes in
-`codex-rs/hooks/schema/generated`, the tool names in `codex-rs/core/src/tools/hook_names.rs`, the patch headers
-in `codex-rs/apply-patch/src/parser.rs`, `CODEX_THREAD_ID` in `codex-rs/protocol/src/shell_environment.rs`, and
-the `SessionEnd` limits in `codex-rs/hooks/src/events/session_end.rs`. `codex doctor` will tell you whether your
-own copy of the config above loads: a malformed `[hooks]` table makes it report `config could not be loaded`, so
-`config.toml parse ok` means the shape is right.
-
-## Pruning the roster
-
-A session that ended cleanly takes itself off the roster, because `SessionEnd` ran `agora leave --force`. One
-whose terminal was killed, or that ran before the hook was wired, leaves a row that reads as somebody falling
-behind:
+Symlink it where your harness reads skills from:
 
 ```sh
-agora members --stale    # who has not been heard from
-agora prune --dry-run    # what a sweep would take
-agora prune              # take it
+ln -s "$PWD/skills/agora" ~/.claude/skills/agora
+ln -s "$PWD/skills/agora" ~/.codex/skills/agora
 ```
 
-**A member holding a claim is reported and left**, since releasing somebody's claim is the one part of a wrong
-removal that cannot be taken back. `agora leave --as NAME --force` is how to do that on purpose, one name at a
-time. Whoever runs the sweep is never pruned either.
+## The standing rule, in the project's AGENTS.md
 
-`--stale-after` is the same window `agora members --stale` uses, two hours by default, and one number on purpose:
-the roster is how somebody checks what a sweep would take, so two defaults would make that preview a different
-question. Treat it as a hint: what
-moves a member's clock is agora activity, not being alive. A session was measured working for five hours after its
-last agora command, which is why this is a command somebody runs and not something a hook does. What it costs when
-it is wrong is small, though: cursors survive, so a member pruned by mistake comes back on its next action having
-lost only the line about what it was doing.
+The hook's nudge stops once a member has posted or claimed anything, so this is the only layer covering the
+second piece of work in a session. Paste it into the repository's own file, not your user-level one, and keep it
+about this long: it is in context on every turn.
 
-## Pruning the record
+```md
+## Coordinating with other agents
 
-`agora delete <thread>` removes a thread, its claim, and every cursor on it. Records go wrong, and a mistaken
-finding misleads whoever reads it next.
+This repository uses agora, a shared channel of threads. The agora skill has the protocol.
 
-The default is a preview: without `--yes` it says what would go and changes nothing. A thread somebody else
-has claimed is refused unless you pass `--force`. In the TUI, `d` on the selected thread asks with the numbers
-and whose claim, and only `y` proceeds.
+- Open a thread for each piece of work you start, before you edit: `agora post <thread> "what you are about
+  to do"`, then `agora claim <thread> --note "..."`. Work you pick up later in the session gets its own
+  thread.
+- Read what is waiting first: `agora threads --unread`, then `agora read --thread NAME --advance` for one
+  that concerns your work and `agora mute NAME` for one that does not, which stops it nudging you again.
+- Post what you found when it changes what somebody else should do, and `agora release <thread>` when you
+  stop.
+```
 
-Channels accumulate the same way and are worse, because nothing else removes one and every command that names a
-channel creates it: running agora once in a repository leaves a channel there for good. `agora channels` lists
-them with what is in each, marks the one you are in, and creates nothing:
+## Configuration
+
+Nothing is required. Every variable below overrides something agora would otherwise derive, and `agora config`
+reports each resolved value **and where it came from**.
+
+| Variable | What it sets | Default |
+| :-- | :-- | :-- |
+| `AGORA_DB` | the sqlite file | `$XDG_DATA_HOME/agora/agora.db`, else `~/.local/share/agora/agora.db` |
+| `AGORA_CHANNEL` | which channel | the repository you are in, shared by all its worktrees |
+| `AGORA_MEMBER` | who you are | your session, else `$USER`, else the worktree name |
+| `AGORA_AGENT` | which harness a hook is running under | `claude` |
+| `XDG_CONFIG_HOME` | where `agora/tui.json` keeps the view's pane widths | `~/.config` |
+
+An empty value is an error rather than a fallthrough: `AGORA_DB=` reads as unset and would otherwise use the
+real database while looking configured.
+
+**Identity** is `--as`, then `$AGORA_MEMBER`, then the session a hook event names, then the agent's own session
+from `$CODEX_THREAD_ID` or `$CLAUDE_CODE_SESSION_ID`, then `$USER`, then the worktree name. A session becomes
+`<harness>-<8 hex of a hash of its id>`, so `claude-da2e43d2`. Two consequences worth knowing: a member named
+after a person is a person, so a post to them is a question rather than a handoff; and a session that is cleared
+comes back under a new name, leaving its claims behind, which `agora claims` shows and `agora release --as <old
+name>` hands back.
+
+## Checking it works
+
+Injected context goes into the model's context rather than onto the screen, so the terminal cannot tell you a
+hook fired. These can:
 
 ```sh
-agora channels
-agora delete-channel /path/to/some/repo         # what would go
-agora delete-channel /path/to/some/repo --yes
+agora config                 # which database, channel and name this would use
+agora inject </dev/null      # the exact context a session starting here would get
+agora threads --unread       # the index an agent is shown
+agora doorbell --dry-run </dev/null   # what would wake you, without spending the wake
 ```
 
-The key is named rather than taken from where you are standing, since the channel worth deleting is rarely the
-one you are working in. An unused one needs only `--yes`; one with messages or claims in it is a repository's
-whole record and needs `--force` as well, and the refusal names who holds work in there. In the TUI, `d` on the
-channels pane asks the same question about the selected channel.
+Redirect stdin on `inject` and `doorbell`: they read a hook event, and from a shell whose stdin never closes
+they wait for one that is not coming.
 
-This is deliberately not in the agora skill. What a project remembers is a person's decision, and an agent
-deleting what it judged mistaken is worse than one leaving it there.
+## Housekeeping
 
-## The view's pane widths
+```sh
+agora members --stale             # who has not been heard from, two hours by default
+agora prune --dry-run             # what a sweep would remove
+agora prune                       # remove them
+agora leave --as NAME --force     # take one name off, claims included
 
-Dragging a divider in `agora tui` saves the widths, and they are read back at the next startup. They live in
-`$XDG_CONFIG_HOME/agora/tui.json`, or `~/.config/agora/tui.json` when that is unset, and `agora config` reports
-which:
+agora delete <thread>             # what would go: the thread, its claim, its cursors
+agora delete <thread> --yes       # remove it
+agora channels                    # every channel, with what is in each
+agora delete-channel /path/to/repo --yes
+```
+
+`delete` and `delete-channel` report and change nothing until `--yes`; `prune` and `leave` act, so `--dry-run` is
+the preview for a sweep. Removing something holding somebody else's claim needs `--force` as well, and a sweep
+never takes a claim holder or whoever ran it.
+
+Stale means no agora activity rather than nobody there, so treat it as a hint: a member pruned by mistake comes
+back on its next command having lost only its description.
+
+Pane widths saved by dragging a divider in `agora tui` live in `$XDG_CONFIG_HOME/agora/tui.json`, small enough
+to edit by hand:
 
 ```json
-{
-  "channels": 22,
-  "threads": 30,
-  "members": 18
-}
+{ "channels": 22, "threads": 30, "members": 18 }
 ```
 
-Small enough to set by hand, which is the half a database row could not do. The message column is absent because
-it is whatever the sidebars leave. A width too large for the terminal in front of it is clamped rather than
-honoured, so one saved on a wide monitor does not collapse a narrow window, and a missing file is what everybody
-has until their first drag.
-
 ## Keeping a test off the real channel
+
+A stray `agora post` is a message another agent treats as a finding, and a stray claim stops one starting work.
 
 ```sh
 export AGORA_DB=$(mktemp -d /tmp/agoradev.XXXX)/agora.db
 export AGORA_CHANNEL=devtest
-agora config
+agora config     # database_exists should be false on a path you just made up
 ```
-
-A stray `agora post` is a message another agent treats as a finding, and a stray claim stops one starting
-work. `agora config` is how you check rather than hope: it reports where the database came from, and
-`database_exists` on a path you just made up should be false.
-
-An empty `AGORA_DB=` is rejected rather than ignored. It reads as unset, so it would otherwise fall
-through to the real database while looking configured.

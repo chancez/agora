@@ -869,6 +869,12 @@ generated schemas in `codex-rs/hooks/schema/generated`: `session_id`, `cwd`, `ho
 `tool_input`, `stop_hook_active`. So the four hook commands run there unchanged, and the wiring is in
 `docs/setup.md`.
 
+Everything asserted about that interface below is read out of Codex's own source, so it can be rechecked when a
+release moves: the payload and output shapes in `codex-rs/hooks/schema/generated`, the tool names and their
+matcher aliases in `codex-rs/core/src/tools/hook_names.rs`, the patch headers in
+`codex-rs/apply-patch/src/parser.rs`, `CODEX_THREAD_ID` in `codex-rs/protocol/src/shell_environment.rs`, and the
+`SessionEnd` timeout ceiling in `codex-rs/hooks/src/events/session_end.rs`.
+
 Five things did not carry over, and all of them fail silently, which is what makes them worth recording. Two were
 found by inspection, two only by running it, and the last is a capability that is simply absent.
 
