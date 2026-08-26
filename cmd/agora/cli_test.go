@@ -58,6 +58,22 @@ func (c *cli) as(member string) *cli {
 	return &cli{t: c.t, dir: c.dir, vars: vars}
 }
 
+// withEnv returns a caller whose environment differs by one variable. An empty value removes it, which is how a
+// test says a harness sets nothing there: agora rejects a variable set to the empty string, since that reads as
+// unset while looking configured.
+func (c *cli) withEnv(name, value string) *cli {
+	vars := make(map[string]string, len(c.vars)+1)
+	for k, v := range c.vars {
+		vars[k] = v
+	}
+	if value == "" {
+		delete(vars, name)
+	} else {
+		vars[name] = value
+	}
+	return &cli{t: c.t, dir: c.dir, vars: vars}
+}
+
 func (c *cli) database() string { return c.vars[config.EnvDatabase] }
 
 func (c *cli) stdin(text string) *cli {

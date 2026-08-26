@@ -103,20 +103,32 @@ func TestLeaveTakesItsIdentityFromTheHookEvent(t *testing.T) {
 	delete(c.vars, config.EnvMember)
 	c.vars[config.EnvClaudeSession] = starting
 
+	// Asked for rather than spelled out, because what a name is derived from is not what this test is about:
+	// internal/config pins the derivation, against hashes computed outside the code.
+	endingName := memberOf(t, c, ending)
+	startingName := memberOf(t, c, starting)
+
 	// Both sessions are in the roster, the one that is ending under the name it was using.
-	c.mustRun("post", "parser-panic", "from the session that is about to end", "--as", "claude-11111111")
+	c.mustRun("post", "parser-panic", "from the session that is about to end", "--as", endingName)
 	c.mustRun("post", "parser-panic", "from the session that just started")
 
 	event := `{"hook_event_name":"SessionEnd","session_id":"` + ending + `","reason":"clear","cwd":"` + c.dir + `"}`
 	got := decode[store.LeaveResult](t, c.stdin(event).mustRun("leave"))
-	if got.Member != "claude-11111111" || !got.Left {
-		t.Fatalf("agora leave with a SessionEnd event = %+v, want claude-11111111 gone", got)
+	if got.Member != endingName || !got.Left {
+		t.Fatalf("agora leave with a SessionEnd event = %+v, want %s gone", got, endingName)
 	}
 
 	roster := decode[[]memberReport](t, c.mustRun("members"))
-	if len(roster) != 1 || roster[0].Name != "claude-22222222" {
+	if len(roster) != 1 || roster[0].Name != startingName {
 		t.Errorf("the roster = %+v, want only the session that is still running", roster)
 	}
+}
+
+// memberOf is the name a session resolves to, from agora rather than from a copy of its rule.
+func memberOf(t *testing.T, c *cli, session string) string {
+	t.Helper()
+	got := decode[configReport](t, c.withEnv(config.EnvClaudeSession, session).mustRun("config"))
+	return got.Member.Value
 }
 
 // TestLeaveWithoutAnEventUsesTheUsualIdentity keeps the stdin read from being a requirement. This is a command
