@@ -354,6 +354,14 @@ do Y and now does X", except in a decision record where the rejected alternative
   developer's, not the one you passed, and an experiment that puts its own build first still measures whatever is
   installed. `ZDOTDIR` isolates the profile for zsh, and asking the shell `command -v agora` before starting is
   the check that makes it visible.
+- **Every agora command needs write access to the database's directory, reads included.** sqlite creates its
+  WAL sidecars to open the file at all, so `agora threads` against a read-only directory fails with `attempt to
+  write a readonly database`. It matters because the database sits outside any workspace on purpose, one channel
+  per repository, so a path-based sandbox refuses it. Codex asks the first time: in a trusted project it runs
+  `workspace-write`, whose writable roots are the working directory and `/tmp`, and either an approved
+  `prefix_rule(pattern=["agora"])` or `sandbox_workspace_write.writable_roots` settles it. `codex debug
+  prompt-input` prints the mode and the roots a session would use, without a model call, which is how to check
+  rather than infer; `codex exec` is read-only, stricter than the interactive default.
 - **`$HOME/.agents` is read whatever `CODEX_HOME` says.** A developer's own instructions there are in every arm,
   and one that mentions agora turns a control into a treatment.
 - **A skill's frontmatter hooks register only once the skill is invoked.** So the "check before you

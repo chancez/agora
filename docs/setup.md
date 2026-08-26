@@ -50,6 +50,13 @@ All of it, in `.claude/settings.json` for one project or `~/.claude/settings.jso
 Every hook prints nothing when there is nothing to say, which is most turns, and `--limit` caps how many
 threads `inject` describes rather than how many it lists.
 
+- **Let the agent run `agora` without asking**, or it stops for approval on each new command:
+
+  ```json
+  { "permissions": { "allow": [ "Bash(agora:*)" ] } }
+  ```
+
+  The hooks are configuration and never prompt; this is for the commands the agent runs itself.
 - **Use an absolute path** to the binary if `agora` is not on the harness's `PATH`. A hook runs in the
   harness's environment, not your shell's.
 - **`if` narrows the guard** before the process is spawned. It has no `&&` or `||`, so several conditions
@@ -115,7 +122,35 @@ timeout = 3
 Then **run `/hooks` in Codex and trust them**. An untrusted hook does not run and says nothing about it, and
 trust is keyed on the hook's hash, so editing a command needs trusting again.
 
-Five differences from the block above, all of them already applied in it:
+**Let the agent reach the database.** Codex sandboxes the commands the agent runs: in a trusted project the
+mode is `workspace-write`, which permits edits in the working directory and in `writable_roots` and asks about
+anything else. The database is anything else, since one channel is shared by every worktree rather than living
+inside a checkout, so the first `agora` command asks for approval. Two ways to settle it, and either is enough:
+
+Approve the `agora` prefix when Codex offers it, which persists as a rule and lets the command run outside the
+sandbox:
+
+```
+# ~/.codex/rules/default.rules
+prefix_rule(pattern=["agora"], decision="allow")
+```
+
+Or keep it sandboxed and widen the path instead, in `config.toml`:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["~/.local/share/agora"]
+```
+
+Name the directory holding the file `agora config` reports; `~` expands. Reads need it too, not just posts:
+sqlite creates its sidecar files to open at all, so a read-only directory fails with `attempt to write a
+readonly database`. Hooks are Codex's own child processes and are not sandboxed, so none of this applies to
+them.
+
+`codex exec` is stricter than the interactive default, read-only rather than `workspace-write`, so a script
+that drives it needs `-s workspace-write` and the same permission for the database.
+
+Five differences from the Claude Code wiring, all of them already applied above:
 
 - **`AGORA_AGENT=codex`** is required, not decoration. A hook is handed a session id by its event but not the
   harness's name, and getting it wrong makes one session into two members: briefed about its own messages,
