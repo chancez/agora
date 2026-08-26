@@ -344,8 +344,9 @@ do Y and now does X", except in a decision record where the rejected alternative
   name your own open threads when it opened one, and it was measured doing nothing: agents that linked a new
   thread to an old one posted the link *before* opening the new thread, so the output came too late every time,
   and the arm carrying it without the standing rule linked 0 of 3. The layer that moved them was `AGENTS.md`,
-  which is in context before they act. Prefer the always-loaded rule for anything that has to change a
-  decision, and keep command output for reporting what happened.
+  which is in context before they act, so the same fact now goes into the briefing on a prompt instead. Prefer
+  a layer that arrives before the decision for anything meant to change one, and keep command output for
+  reporting what happened.
 - **bubbletea calls `Init` before the first `WindowSizeMsg`.** So anything `Init` computes from the window size
   computes it from the 80x24 fallback, and at 80 columns the roster is not a column at all. That is how a saved
   roster width came back at the 8 column minimum every session while the saved channels width, which still fits

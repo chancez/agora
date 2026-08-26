@@ -46,6 +46,12 @@ const (
 	injectMutedMax   = 5
 )
 
+// injectOpenWindow is how recently one of the member's own threads has to have moved to be worth naming on a
+// prompt. Follow-up work arrives close in time to the announcement, so a thread nobody has touched in longer
+// than this is not what the current turn continues, and a standing line in every prompt of every session is a
+// cost this file already refused once.
+const injectOpenWindow = time.Hour
+
 func newInjectCmd(a *app) *cobra.Command {
 	var limit int
 	cmd := &cobra.Command{
@@ -175,7 +181,33 @@ func (a *app) inject(ctx context.Context, stdin io.Reader, limit int) (*injectCo
 	}
 	self := selfIn(members, claims, cfg.Member.Value)
 
+	// The member's own threads, which nothing else in this briefing can see: unread never names them, because
+	// your own messages are read the moment you write them. Measured: this is the layer that moves where an
+	// agent puts its next message, and `agora post` output, which was tried first, arrives after the decision.
+	// scripts/thread-experiment.sh has the numbers.
+	mine, err := s.Threads(ctx, store.ThreadsRequest{
+		Channel: cfg.Channel.Value,
+		Member:  cfg.Member.Value,
+		Author:  cfg.Member.Value,
+		// Reading the channel to brief somebody about it must not change what the channel says.
+		Observe:  true,
+		Worktree: &cfg.Worktree.Value,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	sessionStart := event.HookEventName == "SessionStart"
+	// Named on a prompt and nowhere else, for the same reason announcing is: the prompt is where the work is
+	// named, and a session start has nothing to route yet.
+	open := make([]store.Thread, 0, len(mine))
+	if event.HookEventName == "UserPromptSubmit" {
+		for _, thread := range mine {
+			if time.Since(thread.LastAt) < injectOpenWindow {
+				open = append(open, thread)
+			}
+		}
+	}
 	// Announcing is asked for on a prompt and nowhere else: the prompt is where the work is named, where
 	// SessionStart arrives before the agent has been given anything to announce and PostToolUse would repeat
 	// it beside every tool result of the turn.
@@ -184,7 +216,7 @@ func (a *app) inject(ctx context.Context, stdin io.Reader, limit int) (*injectCo
 	// standing claims from being repeated every prompt: they are a session-start briefing, and the nudge below
 	// is not a reason to send them again.
 	news := len(threads) > 0 || len(stale) > 0 || (sessionStart && len(held) > 0)
-	if !news && !announce {
+	if !news && !announce && len(open) == 0 {
 		return nil, nil
 	}
 	if !news {
@@ -194,7 +226,8 @@ func (a *app) inject(ctx context.Context, stdin io.Reader, limit int) (*injectCo
 		HookEventName: event.HookEventName,
 		// describe rides along with news rather than with the nudge: in a channel where nothing has been said,
 		// a description is a note to nobody.
-		AdditionalContext: injectText(threads, stale, held, self.describe && news, announce, cfg.Member.Value, limit),
+		AdditionalContext: injectText(threads, stale, held, open, self.describe && news, announce,
+			cfg.Member.Value, limit),
 	}, nil
 }
 
@@ -236,7 +269,8 @@ func selfIn(members []store.Member, claims []store.Claim, member string) selfSta
 // It reports rather than instructs, apart from triage and the two questions about the reader: this arrives
 // alongside what the user actually asked for, and an agent that treats the channel as a new task is as wrong as
 // one that ignores it.
-func injectText(threads, muted []store.Thread, held []store.Claim, describe, announce bool, member string, limit int) string {
+func injectText(threads, muted []store.Thread, held []store.Claim, open []store.Thread, describe, announce bool,
+	member string, limit int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[agora] You are %q in the channel for this repository.\n", member)
 
@@ -337,6 +371,27 @@ func injectText(threads, muted []store.Thread, held []store.Claim, describe, ann
 			" \"what you are about to do\"`, then `agora claim NAME --note \"...\"` so an agent starting" +
 			" beside you reads it instead of doing it again. A thread nobody needed costs one line, and two" +
 			" agents fixing one bug twice is what this exists to stop.")
+	}
+	if len(open) > 0 {
+		// Where this turn's message goes, which is the one thing a member cannot look up in its own inbox. Two
+		// sentences: the fact, and the routing, because the fact alone leaves the decision exactly where it was.
+		//
+		// The second half is load bearing in the other direction. Measured with an unrelated third piece of
+		// work in the same session, an agent has to still open a thread for it, and a line that only ever said
+		// "put it in the one you have open" would buy the thread count by making the record worse.
+		para(&b)
+		newest := open[0]
+		if len(open) == 1 {
+			fmt.Fprintf(&b, "You have %s open", newest.Name)
+		} else {
+			fmt.Fprintf(&b, "You have %s of your own open, most recently %s",
+				plural(len(open), "thread"), newest.Name)
+		}
+		fmt.Fprintf(&b, " (%s, last moved %s ago). Follow-up on work you already announced goes in the thread"+
+			" that announced it rather than in a new one, and `agora threads --mine` lists them. A piece of"+
+			" work that stands on its own still gets its own thread, named in the one it came out of so a"+
+			" reader of either finds the other.",
+			plural(int(newest.Messages), "message"), humanAgo(time.Since(newest.LastAt)))
 	}
 	if describe {
 		// Only when the channel already had something to say, so this costs nothing on a quiet turn. It

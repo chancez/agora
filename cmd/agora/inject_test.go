@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chancez/agora/internal/config"
 	"github.com/chancez/agora/internal/store"
@@ -113,7 +114,10 @@ func TestInjectOnEachPromptStaysQuietUnlessSomethingIsUnread(t *testing.T) {
 	// bob has something of his own here, which is what stops the nudge in
 	// TestInjectAsksAnAgentWithNothingHereToOpenAThread. Without this the turn below is not quiet for a
 	// reason this test is about.
-	bob.mustRun("post", "lexer-bounds", "the lexer trims the last token")
+	//
+	// A claim rather than a post, because a thread bob has posted in is one the briefing now routes his next
+	// message to, and that line is the subject of TestInjectNamesTheThreadsYouAlreadyHaveOpen.
+	bob.mustRun("claim", "lexer-bounds", "--note", "the lexer trims the last token")
 
 	// A claim alone is a session-start briefing. Repeating it every turn would spend context on
 	// something that has not changed since the last turn.
@@ -260,8 +264,14 @@ func TestInjectAsksAnAgentWithNothingHereToOpenAThread(t *testing.T) {
 		alice := newCLI(t)
 		alice.mustRun("post", "parser-panic", "the token loop indexes without a bounds check")
 
-		if text, _ := injected(t, alice, "UserPromptSubmit"); text != "" {
+		// What replaces it is the routing line, not silence: a member with a thread of its own has somewhere
+		// for its next message to go, which is a different question from whether it has said anything at all.
+		text, _ := injected(t, alice, "UserPromptSubmit")
+		if strings.Contains(text, want) {
 			t.Errorf("inject asked again after alice posted:\n%s", text)
+		}
+		if !strings.Contains(text, "parser-panic") {
+			t.Errorf("inject stopped naming the thread alice has open:\n%s", text)
 		}
 	})
 
@@ -459,6 +469,98 @@ func TestInjectAsksForADescriptionOnce(t *testing.T) {
 
 		if got := c.mustRun("inject", "--text").stdout; got != "" {
 			t.Errorf("inject spoke to an agent alone in a channel:\n%s", got)
+		}
+	})
+}
+
+// TestInjectNamesTheThreadsYouAlreadyHaveOpen is where the thread-per-turn fix lives, and it is in the briefing
+// rather than in `agora post` because that is what the measurement said: a signal in a command's output arrives
+// after the agent has decided where to write. scripts/thread-experiment.sh has the numbers.
+//
+// Unread cannot carry this. Your own messages are read the moment you write them, so a thread only you have
+// spoken in is invisible to everything else here.
+func TestInjectNamesTheThreadsYouAlreadyHaveOpen(t *testing.T) {
+	t.Run("on a prompt, with the count and where the next message goes", func(t *testing.T) {
+		alice := newCLI(t)
+		alice.mustRun("post", "parser-panic", "the token loop indexes without a bounds check")
+		alice.mustRun("post", "parser-panic", "and the lexer has it too")
+
+		text, _ := injected(t, alice, "UserPromptSubmit")
+		want := "You have parser-panic open (2 messages, last moved 0s ago). Follow-up on work you already" +
+			" announced goes in the thread that announced it rather than in a new one, and `agora threads" +
+			" --mine` lists them. A piece of work that stands on its own still gets its own thread, named in" +
+			" the one it came out of so a reader of either finds the other."
+		if !strings.Contains(text, want) {
+			t.Errorf("the briefing does not route this turn's message:\n%s", text)
+		}
+	})
+
+	t.Run("naming the newest of several", func(t *testing.T) {
+		// Newest first, because that is the one the current turn is most likely continuing, and one name plus a
+		// count rather than a list: this is in context on every prompt of a working session.
+		alice := newCLI(t)
+		alice.mustRun("post", "parser-panic", "starting on the parser")
+		alice.mustRun("post", "tui-widths", "starting on the roster width")
+
+		text, _ := injected(t, alice, "UserPromptSubmit")
+		if !strings.Contains(text, "You have 2 threads of your own open, most recently tui-widths (1 message,") {
+			t.Errorf("the briefing does not name the newest of several:\n%s", text)
+		}
+		if strings.Contains(text, "parser-panic") {
+			t.Errorf("the briefing listed every thread rather than the newest and a count:\n%s", text)
+		}
+	})
+
+	t.Run("not for somebody else's thread", func(t *testing.T) {
+		// The question is where *your* next message goes. A thread you have never spoken in is not one you can
+		// be continuing, and it reaches you as unread anyway.
+		alice := newCLI(t)
+		alice.as("bob").mustRun("post", "docs-rewrite", "renaming the config keys")
+
+		text, _ := injected(t, alice, "UserPromptSubmit")
+		if strings.Contains(text, "Follow-up on work you already announced") {
+			t.Errorf("the briefing routed alice's turn into bob's thread:\n%s", text)
+		}
+	})
+
+	t.Run("not for a thread that has gone cold", func(t *testing.T) {
+		// Follow-up work arrives close in time to the announcement, so a thread nobody has touched for longer
+		// than the window is not what this turn continues, and a line in every prompt of every session is a
+		// cost this file has already refused once.
+		//
+		// Written through the store with a clock of its own, because the CLI deliberately has no clock to
+		// inject: a flag only tests would use is a flag that can be set in production.
+		alice := newCLI(t)
+		old := time.Now().Add(-2 * injectOpenWindow)
+		s, err := store.Open(alice.database(), store.WithClock(func() time.Time { return old }))
+		if err != nil {
+			t.Fatalf("open the store: %v", err)
+		}
+		if _, err := s.Post(t.Context(), store.PostRequest{
+			Channel: "devtest", Author: "alice", Thread: "parser-panic", Body: "started this two hours ago",
+		}); err != nil {
+			t.Fatalf("post an old message: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("close the store: %v", err)
+		}
+
+		text, _ := injected(t, alice, "UserPromptSubmit")
+		if strings.Contains(text, "Follow-up on work you already announced") {
+			t.Errorf("the briefing routed this turn into a thread that last moved two hours ago:\n%s", text)
+		}
+	})
+
+	t.Run("not on a session start or a tool call", func(t *testing.T) {
+		// The prompt is where the work is named. A session start has nothing to route yet, and PostToolUse
+		// would repeat this beside every tool result of the turn.
+		alice := newCLI(t)
+		alice.mustRun("post", "parser-panic", "the token loop indexes without a bounds check")
+
+		for _, event := range []string{"SessionStart", "PostToolUse"} {
+			if text, _ := injected(t, alice, event); strings.Contains(text, "Follow-up on work") {
+				t.Errorf("the briefing routed a %s:\n%s", event, text)
+			}
 		}
 	})
 }

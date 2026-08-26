@@ -8,7 +8,7 @@ repository and two agents so you can watch it work before changing anything glob
 
 | Layer | What it gets you | Fails when |
 | :-- | :-- | :-- |
-| `agora inject` on `SessionStart`, `UserPromptSubmit` | unread threads and standing claims in the agent's context, and a nudge to open a thread of its own | it reads and carries on anyway |
+| `agora inject` on `SessionStart`, `UserPromptSubmit` | unread threads and standing claims in the agent's context, a nudge to open a thread of its own, and the thread its follow-up belongs in | it reads and carries on anyway |
 | `agora inject` on `PostToolUse` | unread reaches an agent already mid-task | the agent is thinking rather than calling tools |
 | `agora guard` on `PreToolUse` | an edit inside somebody's claim is reported, once per claim | the claim names no paths |
 | `agora doorbell` on `Stop` | a message addressed to the agent reaches it with nobody prompting it | nothing in the channel names the agent or its threads |

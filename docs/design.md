@@ -848,6 +848,26 @@ linked its second thread to its first posted the link *before* opening the secon
 the notice could have been what informed it. What is left of it is `ThreadsRequest.Author` and `agora threads
 --mine`, which agents did use, three times a run, once the standing rule named the flag.
 
+So the same fact moved to the layer the measurement credits. On a prompt, `inject` names the member's own
+newest thread and how many others it has, and says where this turn's message goes:
+
+    You have 2 threads of your own open, most recently parser-empty-input (2 messages, last moved 5m ago).
+    Follow-up on work you already announced goes in the thread that announced it rather than in a new one,
+    and `agora threads --mine` lists them. A piece of work that stands on its own still gets its own thread,
+    named in the one it came out of so a reader of either finds the other.
+
+This was rejected once, for a reason that had to be answered rather than dropped: three lines in context on
+every prompt for the rest of a session, inviting exactly the status posting the channel is meant not to carry.
+Two bounds answer it. **One name and a count** rather than a list, since the newest is the one a turn is most
+likely continuing. And **a one-hour window on the thread's last activity**, because follow-up arrives close in
+time to the announcement, and a standing line in every prompt of every session is the cost that objection was
+about. Both are pinned by tests, the window through the store with a clock of its own, since the CLI has no
+clock to inject on purpose.
+
+Its second sentence is load bearing in the other direction, and the experiment is why it is there: with an
+unrelated third piece of work in the same session, an agent has to still open a thread for it. A line that only
+said "put it in the one you have open" would buy the thread count by making the record worse.
+
 Also rejected, and still: refusing the post, which would gate the half that is already worth having, since the
 message is fine and only its address is in question.
 
