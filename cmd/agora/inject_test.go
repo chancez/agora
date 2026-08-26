@@ -184,6 +184,22 @@ func TestInjectIsBounded(t *testing.T) {
 	if !strings.Contains(text, "more threads with unread") {
 		t.Errorf("a truncated index does not say how many threads it left out:\n%s", text)
 	}
+	// Which end gets cut, which is the whole of whether a truncated briefing is usable: the index is ordered by
+	// when each thread last moved, so what a session misses is the stalest thread rather than the one that
+	// arrived while it was working. A thread posted a second ago is the one most likely to be about now.
+	//
+	// The index alone, because the claims block below it names threads by a rule of its own, and this assertion
+	// passed against a reversed sort when it read the whole briefing.
+	index := text
+	if at := strings.Index(index, "Work other agents have claimed"); at > 0 {
+		index = index[:at]
+	}
+	if !strings.Contains(index, "thread-19") {
+		t.Errorf("the newest unread thread is not in the index:\n%s", index)
+	}
+	if strings.Contains(index, "thread-00") {
+		t.Errorf("the index kept the stalest thread and cut a newer one:\n%s", index)
+	}
 }
 
 // TestInjectKeepsOneClaimFromCrowdingOutTheRest is what the per-claim bounds are for, as opposed to the
