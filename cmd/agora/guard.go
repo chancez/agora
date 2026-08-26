@@ -157,6 +157,10 @@ func (a *app) guard(ctx context.Context, stdin io.Reader, ask, deny bool) (*hook
 		return nil, nil
 	}
 
+	// Whose edit this is, from the event rather than the environment, for the same reason inject does it: a
+	// harness that leaves its session id out of a hook's environment would have the guard warn an agent about
+	// the agent's own claim, which is the one warning guaranteed to be noise.
+	a.flags.SessionID = event.SessionID
 	if event.CWD != "" {
 		a.resolver.Dir = event.CWD
 	}

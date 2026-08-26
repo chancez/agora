@@ -7,14 +7,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chancez/agora/internal/config"
 	"github.com/chancez/agora/internal/store"
+	"github.com/google/go-cmp/cmp"
 )
 
-func injectEventJSON(t *testing.T, event, cwd string) string {
+func injectEventJSON(t *testing.T, event, cwd, session string) string {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
 		"hook_event_name": event,
-		"session_id":      "test-session",
+		"session_id":      session,
 		"cwd":             cwd,
 	})
 	if err != nil {
@@ -26,7 +28,7 @@ func injectEventJSON(t *testing.T, event, cwd string) string {
 // injected runs the hook and returns the context it produced, or "" when it said nothing.
 func injected(t *testing.T, c *cli, event string, args ...string) (string, string) {
 	t.Helper()
-	got := c.stdin(injectEventJSON(t, event, c.dir)).run(append([]string{"inject"}, args...)...)
+	got := c.stdin(injectEventJSON(t, event, c.dir, "test-session")).run(append([]string{"inject"}, args...)...)
 	if got.code != 0 {
 		t.Fatalf("agora inject exited %d, want 0 always\nstderr: %s", got.code, got.stderr)
 	}
@@ -348,6 +350,42 @@ func TestInjectSpendsOneLineOnMutedThreads(t *testing.T) {
 	quiet, _ := injected(t, bob, "SessionStart")
 	if strings.Contains(quiet, "muted, with new messages") {
 		t.Errorf("a muted thread with nothing new still got a line:\n%s", quiet)
+	}
+}
+
+// TestInjectBriefsTheSessionTheEventNames is what a second harness needs. Claude Code puts its session id in a
+// hook's environment; Codex promises only to put it in the event, so a hook that read the environment would
+// brief a member the agent is not. The symptom is not a wrong name in a roster: it is a session that is told
+// about its own messages, never told about anybody else's, and cannot release the claims its hooks are shown.
+//
+// Two callers, one session: the agent's own commands, which see the harness's thread id, and the hook, which
+// sees only what the wiring told it and the event it was handed.
+func TestInjectBriefsTheSessionTheEventNames(t *testing.T) {
+	const id = "01a03b15-06a4-7aa3-a7e5-46287dec58e9"
+	alice := newCLI(t)
+	agent := alice.withEnv(config.EnvMember, "").withEnv(config.EnvCodexThread, id)
+	hook := alice.withEnv(config.EnvMember, "").withEnv(config.EnvAgent, "codex")
+
+	alice.mustRun("post", "parser-panic", "empty input reaches the token loop")
+	// Read as the agent, so anything the hook reports afterwards is a briefing for somebody else.
+	agent.mustRun("read", "--advance")
+
+	got := hook.stdin(injectEventJSON(t, "SessionStart", hook.dir, id)).run("inject")
+	if got.code != 0 {
+		t.Fatalf("agora inject exited %d\nstderr: %s", got.code, got.stderr)
+	}
+	if got.stdout != "" {
+		t.Errorf("inject briefed a member the session is not:\n%s", got.stdout)
+	}
+
+	// And the roster has one member for the session rather than two, which is the state that goes wrong.
+	members := decode[[]store.Member](t, alice.mustRun("members"))
+	var names []string
+	for _, m := range members {
+		names = append(names, m.Name)
+	}
+	if diff := cmp.Diff([]string{"alice", "codex-e7784ad5"}, names); diff != "" {
+		t.Errorf("the roster, -want +got:\n%s", diff)
 	}
 }
 
