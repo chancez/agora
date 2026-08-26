@@ -217,9 +217,27 @@ var migrations = []string{}
 
 var schemaVersion = baselineVersion + len(migrations)
 
-// migrate brings the database up to the current version. Two processes can reach this at once on a first
-// run, so the version check and the migrations share one transaction and the loser finds the work done.
+// migrate brings the database up to the current version, and leaves a database already at it completely alone.
+//
+// That last part is why the version is read out here rather than only inside the transaction. Setting
+// `PRAGMA user_version` was unconditional, so every command that opened the database committed a write that
+// changed nothing, inside an immediate transaction. Measured: `agora claims`, `agora members`, `agora channels`
+// and `agora dump` each moved `data_version`, and so did a guard that matched no claim, which runs on every
+// matching edit. Every watcher wakes on a commit, so reading the channel woke everybody watching it, and the
+// guard did it from the edit path while holding the write lock. `agora threads` still moves it, because
+// recording a member is the heartbeat and that is a real write.
+//
+// Two processes can reach this at once on a first run, so the version check and the migrations share one
+// transaction and the loser finds the work done. The read below is therefore an optimisation and not the
+// decision: the transaction re-reads the version and does nothing if the winner already did the work.
 func (s *Store) migrate(ctx context.Context) error {
+	var current int
+	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&current); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if current == schemaVersion {
+		return nil
+	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		var version int
 		if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {

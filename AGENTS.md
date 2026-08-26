@@ -331,7 +331,10 @@ do Y and now does X", except in a decision record where the rejected alternative
 - **sqlite does not move `data_version` for an `UPDATE` that writes the value already there.** Measured
   while building the doorbell's takeover. So a write that changes nothing is invisible to every watcher,
   which is what a heartbeat would need and what a recheck must not need. Both directions are pinned by an
-  internal test, because neither is visible from outside `internal/store`.
+  internal test, because neither is visible from outside `internal/store`. The same file pins the other half:
+  **opening the database must write nothing**, since every watcher wakes on any commit. `PRAGMA user_version`
+  used to be set on every open, so `agora claims`, `agora dump` and a guard that matched no claim each woke
+  everybody watching the channel.
 - **bubbletea calls `Init` before the first `WindowSizeMsg`.** So anything `Init` computes from the window size
   computes it from the 80x24 fallback, and at 80 columns the roster is not a column at all. That is how a saved
   roster width came back at the 8 column minimum every session while the saved channels width, which still fits
