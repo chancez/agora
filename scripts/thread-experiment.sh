@@ -9,7 +9,7 @@
 #
 # Three turns per session, because that failure is only reachable at a turn boundary. The announce nudge fires
 # once and stops the moment a member posts, so from the second prompt on, the only things telling an agent where
-# to put its next message are the standing rule in AGENTS.md and whatever `agora post` said back:
+# to put its next message are the standing rule in AGENTS.md and whatever the briefing named:
 #
 #   1. parser.go panics on empty input. Fix it.            -> opens a thread, correctly
 #   2. lex.go has the same empty-input bug. Fix that too.  -> one root cause, so the thread that announced it
@@ -19,15 +19,20 @@
 # perfectly on turn 2 and be worse than what it replaced, so both numbers are reported and an arm has to get
 # both right.
 #
-# Two variables, four arms, because prose and state ship together and the question is which one moves an agent:
+# Two variables the change can live in, the standing rule in AGENTS.md and the build, so four arms:
 #
-#   before   the old wording, and a build whose `agora post` says only "posted 1 to <channel>"
-#   wording  the new standing rule, and the old build
-#   notice   the old wording, and a build where opening a thread names what you already have open
+#   before   BEFORE_REF's rule, BEFORE_REF's build
+#   rule     the working tree's rule, BEFORE_REF's build
+#   build    BEFORE_REF's rule, the working tree's build
 #   after    both, which is what ships
 #
-# The wording variable is the standing rule in AGENTS.md *and* the skill, taken out of each source tree rather
-# than paraphrased here, because those two ship together and an agent gets both.
+# `before` and `after` are the pair that always means something. The middle two are only worth running when the
+# two trees differ in *both*, which is what the first run of this measured: prose and state ship together, and
+# separating them is how you find out which moved an agent. When the change is in one of the two, run
+# ARMS="before after" and say which in docs/design.md.
+#
+# The rule is taken out of each source tree rather than paraphrased here, along with the skill, because those
+# two ship together and an agent gets both.
 #
 # Codex rather than Claude Code, because that is where the failure was observed, and an arm that never
 # reproduces it measures the agent being right rather than the change working. Everything Codex needs is
@@ -58,10 +63,10 @@ set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RUNS=${RUNS:-2}
-ARMS=${ARMS:-"before wording notice after"}
+ARMS=${ARMS:-"before after"}
 # The branch point, so `before` is the shipped previous thing rather than a description of it. A count back from
 # HEAD was wrong within an hour of being written, because committing this script moved it: the preflight below
-# caught that by finding the notice under test in the before build. Pass BEFORE_REF once this has merged.
+# caught that by finding the layer under test in the before build. Pass BEFORE_REF once this has merged.
 BEFORE_REF=${BEFORE_REF:-main}
 LOGIN_SHELL=${LOGIN_SHELL:-${SHELL:-/bin/sh}}
 
@@ -91,22 +96,34 @@ trap 'git -C "$REPO_ROOT" worktree remove --force "$SANDBOX/before-src" 2>/dev/n
 ( cd "$REPO_ROOT" && go build -o "$SANDBOX/agora-after" ./cmd/agora )
 
 # Prove the arms differ before spending tokens. Two arms carrying the same thing is a null result that looks
-# like a real one, and this script's variable is two things rather than one.
-NOTICE_MARKER='post to whichever of those this work continues'
+# like a real one, and what differs has moved once already: it was the wording plus the output of `agora post`,
+# and it is now a line in the briefing. So the check is on the layer under test rather than on a fixed string,
+# and the arms have to differ in the binary or in the standing rule, or there is nothing here to measure.
+MARKER=${MARKER:-'Follow-up on work you already announced'}
 NUDGE_MARKER='Nothing in this channel is from you yet'
+build_differs=0
 for build in before after; do
-  notice=$(strings "$SANDBOX/agora-$build" | grep -c "$NOTICE_MARKER" || true)
+  marker=$(strings "$SANDBOX/agora-$build" | grep -c "$MARKER" || true)
   nudge=$(strings "$SANDBOX/agora-$build" | grep -c "$NUDGE_MARKER" || true)
-  echo "agora-$build: post notice $notice, announce nudge $nudge"
+  echo "agora-$build: layer under test $marker, announce nudge $nudge"
   [ "$nudge" != "0" ] || { echo "the $build build has no announce nudge, so no arm would open a thread at all" >&2; exit 1; }
-  case $build in
-    before) [ "$notice" = "0" ] || { echo "the before build already has the notice under test" >&2; exit 1; } ;;
-    after)  [ "$notice" != "0" ] || { echo "the after build is missing the notice under test" >&2; exit 1; } ;;
-  esac
+  # Written as ifs rather than && chains: under set -e a chain whose first test fails ends the script, so the
+  # "neither build carries it" case would exit 1 instead of reaching the message that says why.
+  if [ "$build" = before ] && [ "$marker" != "0" ]; then
+    build_differs=-1
+  fi
+  if [ "$build" = after ] && [ "$marker" != "0" ] && [ "$build_differs" = 0 ]; then
+    build_differs=1
+  fi
 done
+case $build_differs in
+  1) echo "the builds differ on the layer under test, which is the variable" ;;
+  -1) echo "the before build already carries the layer under test, so BEFORE_REF is wrong" >&2; exit 1 ;;
+  0) echo "neither build carries the layer under test, so MARKER is wrong for this pair" >&2; exit 1 ;;
+esac
 
 # The standing rule as docs/setup.md hands it to somebody, taken from each tree so this measures the shipped
-# wording. The paste block is the fenced md under "The standing rule": one place, and the arms differ in it.
+# wording. The paste block is the fenced md under "The standing rule": one place, and one of the variables.
 extract_rule() {
   python3 - "$1/docs/setup.md" <<'PY'
 import re, sys
@@ -121,11 +138,13 @@ PY
 extract_rule "$SANDBOX/before-src" > "$SANDBOX/rule-before.md"
 extract_rule "$REPO_ROOT" > "$SANDBOX/rule-after.md"
 if cmp -s "$SANDBOX/rule-before.md" "$SANDBOX/rule-after.md"; then
-  echo "the standing rule is identical in both trees, so the wording arms would measure nothing" >&2
-  exit 1
+  # Which is right when the variable is the binary. It was wrong the first time this ran, when the wording was
+  # the variable and both arms would have carried the same one.
+  echo "the standing rule is identical in both trees, so the arms differ in the binary alone"
+else
+  echo "the standing rule differs:"
+  diff -u "$SANDBOX/rule-before.md" "$SANDBOX/rule-after.md" | sed 's/^/  /' || true
 fi
-echo "the standing rule differs:"
-diff -u "$SANDBOX/rule-before.md" "$SANDBOX/rule-after.md" | sed 's/^/  /' || true
 
 # One repository per run. The fixture carries one root cause at two sites, parser.go and lex.go, for turns 1 and
 # 2, plus an unrelated config path for turn 3, which is the work an agent is *right* to give its own thread.
@@ -218,12 +237,12 @@ run_arm() {
   local channel=demo-$id
   local agora src
   case $arm in
-    before|wording) agora=$SANDBOX/agora-before ;;
-    notice|after)   agora=$SANDBOX/agora-after ;;
+    before|rule)  agora=$SANDBOX/agora-before ;;
+    build|after)  agora=$SANDBOX/agora-after ;;
   esac
   case $arm in
-    before|notice) src=$SANDBOX/before-src ;;
-    wording|after) src=$REPO_ROOT ;;
+    before|build) src=$SANDBOX/before-src ;;
+    rule|after)   src=$REPO_ROOT ;;
   esac
 
   echo
