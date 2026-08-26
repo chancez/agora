@@ -54,6 +54,18 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RUNS=${RUNS:-3}
 ARMS=${ARMS:-"before after"}
+# Which plant, and the difference is the whole experiment:
+#
+#   quoted   the pointer is the unread message of parser-panic, so the briefing quotes it and both arms are told
+#            the name in prose. Measured null, 6 of 6 followed it, and the numbers are in docs/design.md.
+#   buried   the pointer is an *already read* message of parser-panic, and lexer-panic is pushed out of the
+#            briefing by newer traffic. Nothing in the control's context names the far thread, and `related` is
+#            the only route to it, which is the case links were built for and the one a long channel produces on
+#            its own: the reference was message 3 of a thread whose unread starts at message 8.
+PLANT=${PLANT:-buried}
+# Enough unread threads that the briefing's limit of 10 cuts the oldest, which is where lexer-panic goes. The
+# index keeps the most recently active, so what falls off the end is chosen by when each thread last moved.
+NOISE=${NOISE:-10}
 # The commit before links, so `before` is the shipped previous thing rather than a description of it.
 BEFORE_REF=${BEFORE_REF:-03b5717}
 LOGIN_SHELL=${LOGIN_SHELL:-${SHELL:-/bin/sh}}
@@ -92,8 +104,19 @@ verify_plant() {
     linked) case "$out" in *"related: lexer-panic"*) ;; *) echo "the after build did not surface the link:"; echo "$out"; return 1 ;; esac ;;
     prose)  case "$out" in *"related: lexer-panic"*) echo "the before build surfaced a link it cannot have"; return 1 ;; esac ;;
   esac
-  # Either way the pointer is in the message, or this measures a plant with nothing to follow.
-  case "$out" in *lexer-panic*) ;; *) echo "the plant does not name lexer-panic at all:"; echo "$out"; return 1 ;; esac
+  case $PLANT in
+    quoted)
+      # The pointer is the unread message, so reading the thread hands it over whatever the build.
+      case "$out" in *lexer-panic*) ;; *) echo "the plant does not name lexer-panic at all:"; echo "$out"; return 1 ;; esac
+      ;;
+    buried)
+      # And here it must not: the pointer is already read, so `read` does not show it, and the before arm gets
+      # nothing. If this arm names lexer-panic without a link, the isolation this plant exists for is gone.
+      if [ "$expect" = prose ]; then
+        case "$out" in *lexer-panic*) echo "the before build reaches lexer-panic anyway:"; echo "$out"; return 1 ;; esac
+      fi
+      ;;
+  esac
 }
 
 read -r -d '' PARSER <<'GO' || true
@@ -194,8 +217,10 @@ PY
   ( cd "$repo" && git init -q -b main && git add . \
     && git -c user.email=sandbox@example.invalid -c user.name=sandbox commit -qm fixture )
 
-  # The plant. lexer-panic carries the finding and a claim; parser-panic names it and is left unread.
+  # The plant. lexer-panic carries the finding, and how the pointer to it reaches the agent is the variable
+  # between the two plants rather than between the arms.
   local plant=("$agora" --db "$db" --channel "$channel")
+  local want_unread=1
   "${plant[@]}" --as alice join --description "fixing the empty-input panic across the three call sites" >/dev/null
   "${plant[@]}" --as alice post lexer-panic \
     "The panic is not local to Parse. strings.Fields returns an empty slice for whitespace-only input and three call sites index it without a length check: Parse, Lex and Format. A guard in Parse alone hides two of the three, and the next reader will think this is fixed." >/dev/null
@@ -206,11 +231,32 @@ PY
   # nothing. Zero claims exist across every real channel anyway.
   "${plant[@]}" --as alice post parser-panic \
     "Somebody asked about the Parse panic specifically. The root cause and what it takes to fix it are in lexer-panic." >/dev/null
-  # Already triaged, which is the state that makes this a measurement: a thread with nothing unread is not in the
-  # briefing, so the only thing in context that can reach it is the pointer from parser-panic.
-  "${plant[@]}" --as "$member" ack lexer-panic >/dev/null
-  if [ "$(("$("${plant[@]}" --as "$member" threads --unread | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"))" != 1 ]; then
-    echo "  INVALID: the plant does not leave exactly one unread thread"
+  case $PLANT in
+    quoted)
+      # lexer-panic is triaged away, so it is not in the briefing, and the pointer is parser-panic's unread
+      # message, so the briefing quotes it.
+      "${plant[@]}" --as "$member" ack lexer-panic >/dev/null
+      ;;
+    buried)
+      # The pointer is read, so nothing will quote it and `read --thread parser-panic` will not show it either.
+      # lexer-panic stays unread, because a thread with nothing unread has nothing to hand over once the link is
+      # followed, and it is pushed off the end of the briefing by newer traffic instead.
+      "${plant[@]}" --as "$member" ack parser-panic >/dev/null
+      local i
+      for i in $(seq 1 "$NOISE"); do
+        "${plant[@]}" --as alice post "unrelated-$i" \
+          "Housekeeping $i: nothing to do with the parser, and nobody is waiting on it." >/dev/null
+      done
+      # Last, so parser-panic is the most recently active thread and the briefing is certain to carry it, while
+      # lexer-panic is the least recently active and certain to be cut.
+      "${plant[@]}" --as alice post parser-panic \
+        "Bumping this: the Parse panic is still open and somebody should take it." >/dev/null
+      want_unread=$((NOISE + 2))
+      ;;
+    *) echo "PLANT must be quoted or buried, not $PLANT" >&2; exit 1 ;;
+  esac
+  if [ "$(("$("${plant[@]}" --as "$member" threads --unread | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"))" != "$want_unread" ]; then
+    echo "  INVALID: the plant does not leave exactly $want_unread unread thread(s)"
     "${plant[@]}" --as "$member" --text threads | sed 's/^/    /'
     echo invalid > "$dir/invalid"
     return
@@ -232,9 +278,14 @@ PY
     | AGORA_DB=$db AGORA_CHANNEL=$channel AGORA_MEMBER=$member "$agora" inject \
     | python3 -c 'import json,sys; raw=sys.stdin.read(); print(json.loads(raw)["hookSpecificOutput"]["additionalContext"] if raw.strip() else "(the briefing says nothing)")' \
     > "$dir/briefing.txt"
-  for leak in lex.go format.go "three call sites"; do
+  local leaks=(lex.go format.go "three call sites")
+  # With the pointer buried, the *name* must not be in the briefing either: that is the whole isolation, and it is
+  # what the noise threads are for. With the pointer quoted, the name is in it by design.
+  [ "$PLANT" = buried ] && leaks+=(lexer-panic)
+  local leak
+  for leak in "${leaks[@]}"; do
     if grep -qF "$leak" "$dir/briefing.txt"; then
-      echo "  INVALID: the briefing carries the finding itself ($leak), so no arm needs the pointer"
+      echo "  INVALID: the briefing carries $leak, so this arm did not need the pointer"
       sed 's/^/    /' "$dir/briefing.txt"
       echo invalid > "$dir/invalid"
       return
@@ -242,6 +293,7 @@ PY
   done
   if ! grep -q parser-panic "$dir/briefing.txt"; then
     echo "  INVALID: the briefing does not deliver parser-panic, so there is no pointer to follow"
+    sed 's/^/    /' "$dir/briefing.txt"
     echo invalid > "$dir/invalid"
     return
   fi
