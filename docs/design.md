@@ -979,8 +979,9 @@ end of the briefing by ten unrelated threads. Nothing in the control's context n
 | before, pointer buried and unreachable in context | 3 of 3 | 0 | 0 | 3 of 3 |
 | after, `related` the only route in context | 3 of 3 | 0 | 0 | 3 of 3 |
 
-**Every arm of both plants found it, 12 of 12.** The control's first command was `agora threads --unread`, and that
-is the whole answer: **the triage command has no limit**, so it lists every unread thread with its oldest message,
+**Every arm of both plants fixed all three sites, 12 of 12**, though see below for why that number says less than
+it looks: the sites are greppable, so the files cannot tell channel-derived knowledge from code-derived. What the
+transcripts do show is the control's first command, `agora threads --unread`, and that is the reachability answer: **the triage command has no limit**, so it lists every unread thread with its oldest message,
 and a bare `agora read` hands over every unread message in the channel. Measured on a channel of 12 unread
 threads: 12 listed, 12 delivered. The briefing truncates at 10; nothing else does.
 
@@ -1010,6 +1011,30 @@ newest five, oldest first within the window, with the count of what was dropped.
 
 Not `--follow`, which reads as subscribing to what arrives later; that is `agora watch`. The flag is named after
 what it includes, and after the word the output, the JSON and the skill already use.
+
+#### And the experiment that was supposed to settle it is invalid
+
+Reading one control's transcript, before spending the rest of the run, cost the whole measurement two ways. Both
+are the same mistake: **the finding was reachable without the channel.**
+
+- **`rg -n "strings\.Fields|\[0\]"` finds all three call sites.** The fixture reveals its own finding, so
+  "fixed all three sites" cannot tell an agent that read the far thread from one that read the package. That
+  contaminates every link run, the two nulls above included: the file evidence they rest on was never evidence
+  about the channel. What survives is the transcript scan, which says the far thread was opened, and nothing about
+  why the fix was complete.
+- **`agora dump --text` prints the whole channel whatever anybody has read.** The control ran `agora read --help`,
+  `agora --help`, then `agora dump --help && agora dump --text`, and had the finding. It found the command by
+  asking, in the same turn.
+
+That second one is not just a hole in the plant, it is a hole in the argument for `--related` written above. "The
+pointer names something the reader cannot then get" is **wrong**: `agora dump --thread X` gets it, read or unread,
+and an agent finds `dump` on its own. So `--related` is a convenience over a command that already exists, saving a
+reader the discovery, and that is a smaller claim than the one it was built on.
+
+A valid experiment needs a planted finding that **cannot be derived from the code**: an arbitrary constraint on the
+fix, say to return the input unchanged rather than an empty string because callers depend on it, which appears in
+the file if and only if the agent read the channel. That is a fixture redesign rather than another run, and until it
+exists nothing here has measured whether linking threads helps an agent at all.
 
 **Following a link is not reading it.** `agora read --thread X` names the related threads and what is unread in
 each, and touches no cursor but X's. Advancing them would be convenient for exactly the reason it is wrong:
