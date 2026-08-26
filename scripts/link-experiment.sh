@@ -40,8 +40,10 @@
 #      `agora read --thread X` on that printed "no unread". The pointer named something unfetchable.
 #
 # This run is therefore not about the link being recorded but about `--related` carrying messages the member has
-# read. The plant check below states it that way, per arm, in one command: can this build get the finding out of
-# the far thread starting from the thread the briefing delivers?
+# read. The plant check below states it that way, per arm, and it checks *every* route agora offers a triaging
+# agent rather than the one under test: `read --thread X --related`, `threads --unread`, a bare `read`, and
+# `threads`. The narrower version of that check passed a plant whose far thread was unread, where the triage list
+# hands the finding over unasked, and two sessions measured nothing before the transcript said so.
 #
 # The leak that would make it measure nothing is the briefing carrying the *finding* rather than the pointer,
 # checked per run and printed rather than reasoned about. It caught a claim: agora reports standing claims on
@@ -60,13 +62,15 @@ RUNS=${RUNS:-3}
 ARMS=${ARMS:-"before after"}
 # Which plant, and the difference is the whole experiment:
 #
-#   quoted   the pointer is the unread message of parser-panic, so the briefing quotes it and both arms are told
-#            the name in prose. Measured null, 6 of 6 followed it, and the numbers are in docs/design.md.
-#   buried   the pointer is an *already read* message of parser-panic, and lexer-panic is pushed out of the
-#            briefing by newer traffic. Nothing in the control's context names the far thread, and `related` is
-#            the only route to it, which is the case links were built for and the one a long channel produces on
-#            its own: the reference was message 3 of a thread whose unread starts at message 8.
-PLANT=${PLANT:-buried}
+#   quoted   lexer-panic is read, so it is out of the triage list and out of a bare read, and the only thing that
+#            can hand its messages over is --related. The pointer is parser-panic's unread message, so the name is
+#            known and the content is the question. This is the plant for the current variable.
+#   buried   the pointer is an already-read message and lexer-panic is pushed off the end of the briefing by newer
+#            traffic, which hides the *name*. It was the plant for the previous variable and it cannot test this
+#            one: lexer-panic stays unread there so that following the link has something to deliver, and an
+#            unread thread is in the triage list already. Kept because that is exactly what the check below now
+#            refuses, and the refusal is the finding.
+PLANT=${PLANT:-quoted}
 # Enough unread threads that the briefing's limit of 10 cuts the oldest, which is where lexer-panic goes. The
 # index keeps the most recently active, so what falls off the end is chosen by when each thread last moved.
 NOISE=${NOISE:-10}
@@ -106,16 +110,31 @@ done
 FINDING=${FINDING:-'Parse, Lex and Format'}
 verify_plant() {
   local agora=$1 db=$2 channel=$3 member=$4 expect=$5
+  local base=("$agora" --db "$db" --channel "$channel" --as "$member" --text)
   local out
-  out=$("$agora" --db "$db" --channel "$channel" --as "$member" --text read --thread parser-panic --related 2>&1 || true)
-  case $expect in
-    carries)
-      case "$out" in *"$FINDING"*) ;; *) echo "this arm cannot reach the finding from the pointer thread:"; echo "$out"; return 1 ;; esac
-      ;;
-    cannot)
-      case "$out" in *"$FINDING"*) echo "the control reaches the finding in one command, so there is nothing to measure:"; echo "$out"; return 1 ;; esac
-      ;;
-  esac
+  out=$("${base[@]}" read --thread parser-panic --related 2>&1 || true)
+  if [ "$expect" = carries ]; then
+    case "$out" in
+      *"$FINDING"*) return 0 ;;
+      *) echo "this arm cannot reach the finding from the pointer thread:"; echo "$out"; return 1 ;;
+    esac
+  fi
+  # Every route the control has, not just the one under test. This is the check that was missing: it passed a
+  # plant whose far thread was unread, where `agora threads --unread` lists it with its oldest message and a bare
+  # `agora read` hands the whole thing over, so the control needed no pointer at all and two sessions measured
+  # nothing. The routes are what agora offers a triaging agent, and the skill names all three.
+  local route
+  for route in "read --thread parser-panic --related" "threads --unread" "read" "threads"; do
+    # shellcheck disable=SC2086
+    out=$("${base[@]}" $route 2>&1 || true)
+    case "$out" in
+      *"$FINDING"*)
+        echo "the control reaches the finding with \`agora $route\`, so there is nothing to measure:"
+        echo "$out" | head -12
+        return 1
+        ;;
+    esac
+  done
 }
 
 read -r -d '' PARSER <<'GO' || true
