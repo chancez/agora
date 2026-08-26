@@ -17,6 +17,11 @@ import (
 type injectEvent struct {
 	HookEventName string `json:"hook_event_name"`
 	CWD           string `json:"cwd"`
+	// SessionID is the session being briefed, and identity comes from it rather than from the environment.
+	// A harness need not put its session id in a hook's environment, and one that does not would have this
+	// brief a different member than the agent's own commands are, so the agent would be told about its own
+	// messages and never told about anybody else's.
+	SessionID string `json:"session_id"`
 }
 
 type injectOutput struct {
@@ -102,6 +107,7 @@ func (a *app) inject(ctx context.Context, stdin io.Reader, limit int) (*injectCo
 			return nil, fmt.Errorf("read the hook event: %w", err)
 		}
 	}
+	a.flags.SessionID = event.SessionID
 	if event.CWD != "" {
 		// Where the agent is, which is not necessarily where the harness ran this.
 		a.resolver.Dir = event.CWD

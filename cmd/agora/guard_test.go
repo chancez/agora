@@ -6,10 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/chancez/agora/internal/config"
 )
 
 // hookEventJSON is what the harness sends a PreToolUse hook.
 func hookEventJSON(t *testing.T, event string, cwd, tool, path string) string {
+	t.Helper()
+	return hookEventAsJSON(t, event, cwd, tool, path, "test-session")
+}
+
+// hookEventAsJSON is the same event for a named session, for the tests about whose edit it is.
+func hookEventAsJSON(t *testing.T, event, cwd, tool, path, session string) string {
 	t.Helper()
 	input := map[string]string{}
 	if tool == "NotebookEdit" {
@@ -17,13 +25,18 @@ func hookEventJSON(t *testing.T, event string, cwd, tool, path string) string {
 	} else if path != "" {
 		input["file_path"] = path
 	}
-	raw, err := json.Marshal(map[string]any{
+	return eventJSON(t, map[string]any{
 		"hook_event_name": event,
-		"session_id":      "test-session",
+		"session_id":      session,
 		"cwd":             cwd,
 		"tool_name":       tool,
 		"tool_input":      input,
 	})
+}
+
+func eventJSON(t *testing.T, event map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(event)
 	if err != nil {
 		t.Fatalf("marshal the hook event: %v", err)
 	}
@@ -237,6 +250,33 @@ func TestGuardSaysNothing(t *testing.T) {
 				t.Errorf("exit %d, stdout %q, want 0 and nothing: %s", got.code, got.stdout, tc.why)
 			}
 		})
+	}
+}
+
+// TestGuardKnowsWhoseEditItIsFromTheEvent is the same property as TestInjectBriefsTheSessionTheEventNames, in
+// the layer where getting it wrong is loudest. A harness that keeps its session id out of a hook's environment
+// would have the guard resolve some other member, and then the one claim it is certain to report is the agent's
+// own. A warning about your own work on every edit under your own claim is how this layer gets switched off.
+func TestGuardKnowsWhoseEditItIsFromTheEvent(t *testing.T) {
+	const id = "01a03b15-06a4-7aa3-a7e5-46287dec58e9"
+	alice := newCLI(t)
+	agent := alice.withEnv(config.EnvMember, "").withEnv(config.EnvCodexThread, id)
+	hook := alice.withEnv(config.EnvMember, "").withEnv(config.EnvAgent, "codex")
+	agent.mustRun("claim", "parser-panic", "--note", "root cause is in the token loop", "--paths", "parser.go")
+
+	event := hookEventAsJSON(t, "PreToolUse", hook.dir, "Edit", filepath.Join(hook.dir, "parser.go"), id)
+	got := hook.stdin(event).run("guard")
+	if got.code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstderr: %s", got.code, got.stderr)
+	}
+	if got.stdout != "" {
+		t.Errorf("the guard warned a session about its own claim:\n%s", got.stdout)
+	}
+
+	// Somebody else's claim on the same file still reports, so this is quiet for the right reason.
+	alice.mustRun("claim", "parser-rewrite", "--paths", "parser.go")
+	if got := hook.stdin(event).run("guard"); !strings.Contains(got.stdout, "parser-rewrite") {
+		t.Errorf("the guard missed another member's claim:\nstdout: %s\nstderr: %s", got.stdout, got.stderr)
 	}
 }
 
