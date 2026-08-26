@@ -932,6 +932,37 @@ So the honest summary of the whole thing, across 18 sessions: **a thread per sit
 layer tried here changed that** (2 of 18 kept one thread). What is reachable is that the sites stay joined, which
 is the failure that was actually reported, and that took the two always-loaded layers rather than either alone.
 
+#### Links, because the pointer was already being written
+
+The measurement above says an agent will open a thread per site and, given the standing rule, name the new one in
+the thread it came out of. That pointer was prose: a person could follow it and nothing else could. So a message
+naming a thread now records a link, which needed no new syntax and no new habit, because the behaviour was
+already there to read.
+
+Four decisions, and the first two came out of the measurement rather than from taste:
+
+- **Both directions, always.** In every run that linked, the pointer was posted *before* the thread it named
+  existed. A scan of the threads present at post time would have found none of them, so the first message in a
+  thread also scans what came earlier for its own name.
+- **A bare name counts only when it carries a separator**, and `#general` is how a one-word thread gets
+  referenced on purpose. Every name an agent was observed choosing is a slug, and a thread called `general` or
+  `docs` appears in ordinary prose, where a false link costs a reader the same as a missing one.
+- **A full stop ends a sentence rather than a name.** The member rule counts `.` as part of a name so that
+  `alice.dev` is one name; every measured reference ended a sentence, so reusing that rule found nothing. It
+  still continues a name when a name character follows, which keeps `lex-empty-input.go` a filename. Found end
+  to end against the exact sentence agents write, after unit tests that used the same names without the stop
+  passed.
+- **Undirected for a reader, directed in the table.** Who pointed at whom is worth keeping, and the seq of the
+  message that did it goes with it, but the question a reader has is "where is the other half", and that has no
+  direction.
+
+**Following a link is not reading it.** `agora read --thread X` names the related threads and what is unread in
+each, and touches no cursor but X's. Advancing them would be convenient for exactly the reason it is wrong:
+`read` shows and `--advance` consumes because the failures are asymmetric, and a call that consumed a thread
+nobody asked for would lose messages in the one thread the reader had not decided about yet. Traversal that
+displays the far side's messages inline is a flag away and is not built, because what a reader does with a link
+it can see has not been measured yet.
+
 Three traps beyond the ones above:
 
 - **Turn 2 has to be work turn 1 did not do.** It first asked for the regression test, which a competent agent

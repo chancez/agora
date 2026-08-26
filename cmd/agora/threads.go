@@ -102,6 +102,11 @@ func writeThreads(w io.Writer, channel string, threads []store.Thread) {
 			line += "  claimed by " + thread.Claim
 		}
 		fmt.Fprintln(w, line)
+		if len(thread.Related) > 0 {
+			// The other half of work that got split. Measured: an agent opens a thread per site and names it in
+			// the one it came out of, so this is where that pointer stops being prose somebody has to read.
+			fmt.Fprintf(w, "    related: %s\n", strings.Join(thread.Related, ", "))
+		}
 		if thread.First != nil {
 			// The oldest unread message, because it is the one that says what the thread is about, which
 			// is what deciding to read or dismiss turns on.

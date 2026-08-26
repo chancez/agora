@@ -65,6 +65,12 @@ VALUES(?, ?, ?, ?, ?, ?)`,
 		if err := liftMutes(ctx, tx, channelID, req.Thread, req.Author, req.Body); err != nil {
 			return err
 		}
+		// Any thread this message names is now reachable from this one, and the other way about. Number is this
+		// message's place in its thread, so 1 means the thread starts here, which is the only time it is worth
+		// looking for references written before it existed.
+		if err := recordLinks(ctx, tx, channelID, req.Thread, req.Body, msg.Seq, msg.Number == 1); err != nil {
+			return err
+		}
 		// Posting puts you in the roster, so a message never has an author nobody can look up.
 		return s.upsertMember(ctx, tx, channelID, req.Author, req.Worktree)
 	})
@@ -185,6 +191,14 @@ LIMIT ?`
 		return nil, fmt.Errorf("list threads in %q: %w", req.Channel, err)
 	}
 
+	related, err := linksByThread(ctx, q, channelID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range threads {
+		threads[i].Related = related[threads[i].Name]
+	}
+
 	for i := range threads {
 		if firstUnre[i] == 0 {
 			continue
@@ -270,6 +284,16 @@ func (s *Store) Read(ctx context.Context, req ReadRequest) (ReadResult, error) {
 					return err
 				}
 			}
+		}
+		// The other half of work that got split, when one thread was asked for. Named with its unread count and
+		// nothing else, and its cursor is not touched: reading one thread must not mark another read, which is
+		// the whole reason displaying and advancing are two calls. A reader that wants it says so.
+		if req.Thread != "" {
+			related, err := relatedThreads(ctx, tx, req, channelID)
+			if err != nil {
+				return err
+			}
+			result.Related = related
 		}
 		// Every thread this member stands anywhere on, not only the ones this call delivered from. A read
 		// that finds nothing new would otherwise report no cursors at all, which reads as "you have read
@@ -570,6 +594,10 @@ func (s *Store) Delete(ctx context.Context, req DeleteRequest) (DeleteResult, er
 			`DELETE FROM messages WHERE channel_id = ? AND thread = ?`,
 			`DELETE FROM cursors WHERE channel_id = ? AND thread = ?`,
 			`DELETE FROM claims WHERE channel_id = ? AND thread = ?`,
+			// Both directions, or the threads that pointed at this one keep offering a reader a name that
+			// resolves to nothing.
+			`DELETE FROM links WHERE channel_id = ? AND from_thread = ?`,
+			`DELETE FROM links WHERE channel_id = ? AND to_thread = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt, channelID, req.Thread); err != nil {
 				return fmt.Errorf("delete %q: %w", req.Thread, err)

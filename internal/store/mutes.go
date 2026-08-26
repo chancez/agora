@@ -146,18 +146,24 @@ func liftMutes(ctx context.Context, tx *sql.Tx, channelID int64, thread, author,
 //
 // Case insensitive, since a member writing about "Alice" means alice.
 func mentions(body, member string) bool {
-	if member == "" {
+	return named(body, member, namePart)
+}
+
+// named is the shared matcher, with the boundary rule passed in because a thread name and a member name do not
+// end the same way. See references in links.go for the one that differs and why.
+func named(body, name string, part func(string, int) bool) bool {
+	if name == "" {
 		return false
 	}
-	lowerBody, lowerMember := strings.ToLower(body), strings.ToLower(member)
+	lowerBody, lowerName := strings.ToLower(body), strings.ToLower(name)
 	for at := 0; ; {
-		i := strings.Index(lowerBody[at:], lowerMember)
+		i := strings.Index(lowerBody[at:], lowerName)
 		if i < 0 {
 			return false
 		}
 		start := at + i
-		end := start + len(lowerMember)
-		if !namePart(lowerBody, start-1) && !namePart(lowerBody, end) {
+		end := start + len(lowerName)
+		if !part(lowerBody, start-1) && !part(lowerBody, end) {
 			return true
 		}
 		at = start + 1

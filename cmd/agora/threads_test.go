@@ -255,3 +255,43 @@ func TestThreadsMineIsWhatToCheckBeforeOpeningAnother(t *testing.T) {
 		t.Error("agora --text threads --mine did not name parser-panic")
 	}
 }
+
+// TestAReaderOfEitherHalfFindsTheOther is the point of links at the command line. Measured across 18 sessions: an
+// agent opens a thread per site whatever the instruction says, and what it does do is name the new thread in the
+// one it came out of. Until that pointer was recorded it was prose, so only a person could follow it.
+func TestAReaderOfEitherHalfFindsTheOther(t *testing.T) {
+	alice := newCLI(t)
+	carol := alice.as("carol")
+	alice.mustRun("post", "parser-empty-input", "fixing the unchecked Fields()[0] in Parse")
+	// Written before the thread it names exists, which is what every measured agent did.
+	alice.mustRun("post", "parser-empty-input", "Lex has the same bug; tracking that in lex-empty-input")
+	alice.mustRun("post", "lex-empty-input", "fixing Lex the same way")
+
+	from := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "parser-empty-input"))
+	if len(from.Related) != 1 || from.Related[0].Name != "lex-empty-input" || from.Related[0].Unread != 1 {
+		t.Errorf("reading parser-empty-input did not offer lex-empty-input with its unread: %+v", from.Related)
+	}
+	// The far end reports the link too, though nobody wrote a word in it about the parser.
+	to := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "lex-empty-input"))
+	if len(to.Related) != 1 || to.Related[0].Name != "parser-empty-input" {
+		t.Errorf("reading lex-empty-input did not offer parser-empty-input: %+v", to.Related)
+	}
+
+	// And following one is the reader's decision. A read that consumed a thread nobody asked for is the failure
+	// the display and advance split exists to prevent, so the related thread's cursor has to be where it was.
+	advanced := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "parser-empty-input", "--advance"))
+	if advanced.Cursors["lex-empty-input"] != 0 {
+		t.Errorf("advancing parser-empty-input moved lex-empty-input to %d, want 0",
+			advanced.Cursors["lex-empty-input"])
+	}
+	still := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "lex-empty-input"))
+	if len(still.Messages) != 1 {
+		t.Errorf("lex-empty-input has %d unread after reading the thread that names it, want 1",
+			len(still.Messages))
+	}
+
+	text := carol.mustRun("--text", "threads").stdout
+	if !strings.Contains(text, "related: lex-empty-input") {
+		t.Errorf("agora --text threads does not show the link:\n%s", text)
+	}
+}

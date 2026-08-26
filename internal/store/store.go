@@ -213,7 +213,26 @@ CREATE TABLE doorbells (
 //
 // The first version of this compared versions and then fell through to CREATE TABLE over existing tables. Found
 // against a real database rather than by a test, because every test started from an empty file.
-var migrations = []string{}
+var migrations = []string{
+	// One thread naming another, which agents write on their own once the standing rule asks them to: measured
+	// 3 of 3, "tracking that separate fix in lex-empty-input". Recording it makes the pointer traversable
+	// instead of only readable, so a reader of either half can find the other without parsing prose.
+	//
+	// Directed, with the message that made the reference, because who pointed at whom is the part a reader
+	// wants; displayed both ways, because finding the other half is the point. seq rather than a timestamp so
+	// it orders with everything else in the channel.
+	`
+CREATE TABLE links (
+	channel_id  INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+	from_thread TEXT NOT NULL,
+	to_thread   TEXT NOT NULL,
+	seq         INTEGER NOT NULL,
+	PRIMARY KEY (channel_id, from_thread, to_thread)
+);
+
+CREATE INDEX links_to_idx ON links(channel_id, to_thread);
+`,
+}
 
 var schemaVersion = baselineVersion + len(migrations)
 

@@ -71,6 +71,9 @@ hook output over 10000 characters is spilled to a file and replaced with a previ
 func writeUnread(w io.Writer, result store.ReadResult, advanced bool) {
 	if len(result.Messages) == 0 {
 		fmt.Fprintf(w, "no unread in %s as %s\n", result.Channel, result.Member)
+		// Still worth saying here: a thread you have already read is exactly where somebody put the pointer to
+		// the half of the work that went elsewhere.
+		writeRelated(w, result.Related)
 		return
 	}
 	fmt.Fprintf(w, "%d unread in %s as %s\n", len(result.Messages), result.Channel, result.Member)
@@ -82,6 +85,7 @@ func writeUnread(w io.Writer, result store.ReadResult, advanced bool) {
 	if result.Remaining > 0 {
 		fmt.Fprintf(w, "%d more unread, not shown\n", result.Remaining)
 	}
+	writeRelated(w, result.Related)
 	if advanced {
 		fmt.Fprintf(w, "marked read: %s\n", threadList(result.Cursors))
 		return
@@ -90,6 +94,28 @@ func writeUnread(w io.Writer, result store.ReadResult, advanced bool) {
 	// wonder why the same messages keep arriving.
 	fmt.Fprintf(w, "nothing marked read, run `agora read --advance` to mark these read,"+
 		" or `agora ack --thread NAME` to dismiss one without reading it\n")
+}
+
+// writeRelated names the other half of work that got split. Nothing in it was read and no cursor moved, so it
+// says what is waiting rather than showing it: following the pointer is the reader's decision, and one read that
+// silently consumed two threads would be the failure the display and advance split exists to prevent.
+func writeRelated(w io.Writer, related []store.Thread) {
+	if len(related) == 0 {
+		return
+	}
+	names := make([]string, 0, len(related))
+	for _, thread := range related {
+		state := "nothing unread"
+		if thread.Unread > 0 {
+			state = fmt.Sprintf("%d unread", thread.Unread)
+		}
+		if thread.Muted {
+			state += ", muted"
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", thread.Name, state))
+	}
+	fmt.Fprintf(w, "related: %s\n", strings.Join(names, ", "))
+	fmt.Fprintf(w, "  `agora read --thread %s` to follow one, nothing here was read\n", related[0].Name)
 }
 
 // threadList names the threads a cursor moved on, sorted so the output does not vary between runs.

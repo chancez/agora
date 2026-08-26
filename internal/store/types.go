@@ -54,6 +54,9 @@ type Thread struct {
 	LastAt   time.Time `json:"last_at"`
 	// Claim is who owns this thread's work, empty when nobody does.
 	Claim string `json:"claim,omitempty"`
+	// Related is the threads this one names or is named by, oldest reference first. Undirected, because what a
+	// reader needs is the other half of a piece of work that got split, whichever end pointed at the other.
+	Related []string `json:"related,omitempty"`
 	// Muted is set when this member has dismissed the thread. Unread is still counted for a muted thread,
 	// because "muted, 4 new" is what keeps a mute from becoming a thread nobody can find again.
 	Muted bool `json:"muted,omitempty"`
@@ -237,6 +240,9 @@ type ReadResult struct {
 	// Cursors is where each thread's cursor stands after the call, so a caller can tell a peek from an
 	// advance from the result alone.
 	Cursors map[string]int64 `json:"cursors"`
+	// Related is the threads this one names or is named by, with what is unread in each, filled in when one
+	// thread was asked for. Their cursors are untouched: reading one thread must not mark another read.
+	Related []Thread `json:"related,omitempty"`
 }
 
 // AckRequest marks threads read without reading them, which is the other half of triage: deciding a thread
