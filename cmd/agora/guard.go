@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,14 +34,56 @@ type hookEvent struct {
 type toolInput struct {
 	FilePath     string `json:"file_path"`
 	NotebookPath string `json:"notebook_path"`
+	// Command is the whole of an apply_patch call, which is how Codex edits a file: one call, the patch
+	// text, and no file_path anywhere in the event. Read only for that tool, since Bash carries a command
+	// here too and guessing at a command line is the false positive that gets this layer removed.
+	Command string `json:"command"`
 }
 
-// path is the file the tool is about to change, empty for a tool that does not name one.
-func (e hookEvent) path() string {
-	if e.ToolInput.FilePath != "" {
-		return e.ToolInput.FilePath
+// applyPatchTool is Codex's editor. `Edit` and `Write` select the same hooks as matcher aliases, but the
+// tool_name in the event is always this.
+const applyPatchTool = "apply_patch"
+
+// The headers that name a file in a patch, from codex-rs/apply-patch/src/parser.rs. Move to is a rename's
+// destination, which is a file this call writes.
+var patchFileMarkers = []string{"*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "}
+
+// paths are the files the tool is about to change, empty for a tool that does not name any.
+func (e hookEvent) paths() []string {
+	if e.ToolName == applyPatchTool {
+		return patchPaths(e.ToolInput.Command)
 	}
-	return e.ToolInput.NotebookPath
+	if e.ToolInput.FilePath != "" {
+		return []string{e.ToolInput.FilePath}
+	}
+	if e.ToolInput.NotebookPath != "" {
+		return []string{e.ToolInput.NotebookPath}
+	}
+	return nil
+}
+
+// patchPaths reads the files a patch touches out of its headers. One call can carry several, and a patch
+// whose headers do not parse yields nothing, which is the same as any other tool that names no file: the
+// guard says nothing rather than guessing.
+func patchPaths(patch string) []string {
+	var paths []string
+	seen := map[string]bool{}
+	for line := range strings.SplitSeq(patch, "\n") {
+		line = strings.TrimRight(line, "\r")
+		for _, marker := range patchFileMarkers {
+			after, ok := strings.CutPrefix(line, marker)
+			if !ok {
+				continue
+			}
+			path := strings.TrimSpace(after)
+			if path != "" && !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+			break
+		}
+	}
+	return paths
 }
 
 type hookOutput struct {
@@ -100,7 +143,11 @@ guard says so on stderr and lets the edit through.
 Wire it per-tool, filtered before the process is spawned:
 
     { "matcher": "Edit|Write", "if": "Edit(**/*.go)",
-      "hooks": [{ "type": "command", "command": "agora guard", "timeout": 5 }] }`,
+      "hooks": [{ "type": "command", "command": "agora guard", "timeout": 5 }] }
+
+Codex edits through apply_patch instead, one call carrying a patch that can touch
+several files, and every file in it is checked. A matcher of "apply_patch|Edit|Write"
+covers either harness.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if ask && deny {
@@ -150,8 +197,8 @@ func (a *app) guard(ctx context.Context, stdin io.Reader, ask, deny bool) (*hook
 	if event.HookEventName != "" && event.HookEventName != "PreToolUse" {
 		return nil, nil
 	}
-	path := event.path()
-	if path == "" {
+	paths := event.paths()
+	if len(paths) == 0 {
 		// A tool that names no file, such as Bash. There is nothing to compare a glob against, and
 		// guessing at a command line is exactly the kind of false positive that gets this removed.
 		return nil, nil
@@ -183,7 +230,7 @@ func (a *app) guard(ctx context.Context, stdin io.Reader, ask, deny bool) (*hook
 		return nil, err
 	}
 
-	held := matchingClaims(claims, cfg.Member.Value, path, event.CWD, cfg.Worktree.Value)
+	held := matchingClaims(claims, cfg.Member.Value, paths, event.CWD, cfg.Worktree.Value)
 	if len(held) == 0 {
 		return nil, nil
 	}
@@ -200,7 +247,7 @@ func (a *app) guard(ctx context.Context, stdin io.Reader, ask, deny bool) (*hook
 		notice, err := s.Notice(ctx, store.NoticeRequest{
 			Channel: cfg.Channel.Value,
 			Member:  cfg.Member.Value,
-			Claims:  held,
+			Claims:  claimsOf(held),
 		})
 		if err != nil {
 			return nil, err
@@ -210,7 +257,7 @@ func (a *app) guard(ctx context.Context, stdin io.Reader, ask, deny bool) (*hook
 		}
 		return &hookDecision{
 			HookEventName:     "PreToolUse",
-			AdditionalContext: overlapReason(path, notice.New, mode),
+			AdditionalContext: overlapReason(overlapsFor(held, notice.New), mode),
 		}, nil
 	}
 	decision := "deny"
@@ -220,37 +267,106 @@ func (a *app) guard(ctx context.Context, stdin io.Reader, ask, deny bool) (*hook
 	return &hookDecision{
 		HookEventName:            "PreToolUse",
 		PermissionDecision:       decision,
-		PermissionDecisionReason: overlapReason(path, held, mode),
+		PermissionDecisionReason: overlapReason(held, mode),
 	}, nil
 }
 
-// matchingClaims returns the claims covering path that somebody else holds.
+// overlap is a claim this call runs into, and the file of the call that it covers. One apply_patch call can
+// touch several files, so which file matched is part of what the agent is told.
+type overlap struct {
+	claim store.Claim
+	path  string
+}
+
+func claimsOf(held []overlap) []store.Claim {
+	claims := make([]store.Claim, 0, len(held))
+	for _, o := range held {
+		claims = append(claims, o.claim)
+	}
+	return claims
+}
+
+// overlapsFor keeps the overlaps whose claim is in the list, which is how the notice reports only what this
+// member has not been told while keeping the file each claim matched.
+func overlapsFor(held []overlap, claims []store.Claim) []overlap {
+	fresh := make([]overlap, 0, len(claims))
+	for _, o := range held {
+		for _, claim := range claims {
+			if claim.Thread == o.claim.Thread && claim.Holder == o.claim.Holder {
+				fresh = append(fresh, o)
+				break
+			}
+		}
+	}
+	return fresh
+}
+
+// matchingClaims returns the claims covering any of these paths that somebody else holds, each with the first
+// path it covered. A claim is reported once however many of the call's files it covers, since it is one piece of
+// somebody else's work either way.
 //
 // A claim with no paths never matches: prose is unreadable to a guard, and guessing would stop real work.
 //
 // Globs match the path relative to the *worktree*, not the channel. The channel is the main checkout, so a file
 // in a linked worktree is `.worktrees/parser/parser.go` relative to it and a claim on `parser.go` would match
 // nothing anyone edits. The channel key can also be an arbitrary string, via --channel.
-func matchingClaims(claims []store.Claim, member, path, cwd, worktree string) []store.Claim {
+func matchingClaims(claims []store.Claim, member string, paths []string, cwd, worktree string) []overlap {
+	var held []overlap
+	for _, claim := range claims {
+		if claim.Holder == member {
+			continue
+		}
+		for _, path := range paths {
+			if !matchesAny(claim.Paths, candidatePaths(path, cwd, worktree)) {
+				continue
+			}
+			held = append(held, overlap{claim: claim, path: path})
+			break
+		}
+	}
+	return held
+}
+
+// candidatePaths is the file as a claim's globs might name it: absolute, and relative to the worktree.
+//
+// Symlinks are resolved on both sides before the relative path is taken, because the two sides come from
+// different places and need not agree. agora asks git for the worktree, which reports a resolved path; a
+// harness reports whatever it was given. Measured: a Codex agent editing in /tmp/agoracodex.N6bG3C sent that
+// path while git reported /private/tmp/agoracodex.N6bG3C, since /tmp is a symlink on darwin, and Rel of the two
+// is a path full of "..", so a claim on `parser.go` matched nothing and the guard was silent on every edit.
+func candidatePaths(path, cwd, worktree string) []string {
 	absolute := path
 	if !filepath.IsAbs(absolute) {
 		absolute = filepath.Join(cwd, absolute)
 	}
 	candidates := []string{absolute}
-	if relative, err := filepath.Rel(worktree, absolute); err == nil && !strings.HasPrefix(relative, "..") {
-		candidates = append(candidates, relative)
-	}
-
-	var held []store.Claim
-	for _, claim := range claims {
-		if claim.Holder == member {
+	for _, base := range [][2]string{{worktree, absolute}, {resolve(worktree), resolve(absolute)}} {
+		relative, err := filepath.Rel(base[0], base[1])
+		if err != nil || strings.HasPrefix(relative, "..") {
 			continue
 		}
-		if matchesAny(claim.Paths, candidates) {
-			held = append(held, claim)
+		if !slices.Contains(candidates, relative) {
+			candidates = append(candidates, relative)
 		}
 	}
-	return held
+	return candidates
+}
+
+// resolve follows symlinks as far as the path exists, keeping the rest. A file an edit is about to create does
+// not exist yet, so resolving the whole path is not an option, and the part that differs is a directory prefix
+// anyway.
+func resolve(path string) string {
+	rest := ""
+	for dir := path; ; dir = filepath.Dir(dir) {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+	}
 }
 
 func matchesAny(patterns, candidates []string) bool {
@@ -270,14 +386,15 @@ func matchesAny(patterns, candidates []string) bool {
 //
 // The question is never "is this file taken", which is ordinary and git's problem. It is whether these are two
 // goes at one piece of work, which the holder's note answers and a path list only hints at.
-func overlapReason(path string, held []store.Claim, mode guardMode) string {
+func overlapReason(held []overlap, mode guardMode) string {
 	var b strings.Builder
-	for i, claim := range held {
+	for i, o := range held {
+		claim := o.claim
 		if i > 0 {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "agora: %s is working on %s, which covers %s (claimed %s ago).",
-			claim.Holder, claim.Thread, filepath.Base(path), time.Since(claim.CreatedAt).Round(time.Minute))
+			claim.Holder, claim.Thread, filepath.Base(o.path), time.Since(claim.CreatedAt).Round(time.Minute))
 		if claim.Note != "" {
 			fmt.Fprintf(&b, "\nTheir note: %s", truncate(claim.Note, noteLimit))
 		}

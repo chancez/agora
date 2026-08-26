@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/chancez/agora/internal/config"
+	"github.com/google/go-cmp/cmp"
 )
 
 // hookEventJSON is what the harness sends a PreToolUse hook.
@@ -31,6 +32,19 @@ func hookEventAsJSON(t *testing.T, event, cwd, tool, path, session string) strin
 		"cwd":             cwd,
 		"tool_name":       tool,
 		"tool_input":      input,
+	})
+}
+
+// codexEventJSON is a PreToolUse event as Codex sends one. Codex has no Edit or Write tool: an edit is one
+// apply_patch call whose tool_input is the patch text, and the event names no file anywhere else.
+func codexEventJSON(t *testing.T, cwd, tool, command string) string {
+	t.Helper()
+	return eventJSON(t, map[string]any{
+		"hook_event_name": "PreToolUse",
+		"session_id":      "test-session",
+		"cwd":             cwd,
+		"tool_name":       tool,
+		"tool_input":      map[string]string{"command": command},
 	})
 }
 
@@ -277,6 +291,135 @@ func TestGuardKnowsWhoseEditItIsFromTheEvent(t *testing.T) {
 	alice.mustRun("claim", "parser-rewrite", "--paths", "parser.go")
 	if got := hook.stdin(event).run("guard"); !strings.Contains(got.stdout, "parser-rewrite") {
 		t.Errorf("the guard missed another member's claim:\nstdout: %s\nstderr: %s", got.stdout, got.stderr)
+	}
+}
+
+// TestGuardSeesACodexEdit is the difference between this layer being wired on Codex and being decorative there.
+// Codex edits through apply_patch: one call, the patch text in tool_input, and no file_path in the event at all.
+// A guard reading file_path is therefore silent on every edit Codex makes, which looks exactly like an agent
+// whose edits never overlap anybody.
+//
+// The headers are from codex-rs/apply-patch/src/parser.rs. Move to is a rename's destination, which is a file the
+// call writes.
+func TestGuardSeesACodexEdit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		patch string
+	}{
+		{name: "an update", patch: "*** Begin Patch\n*** Update File: parser.go\n@@\n-old\n+new\n*** End Patch\n"},
+		{name: "an addition", patch: "*** Begin Patch\n*** Add File: parser.go\n+package main\n*** End Patch\n"},
+		{name: "a deletion", patch: "*** Begin Patch\n*** Delete File: parser.go\n*** End Patch\n"},
+		{
+			name: "a rename into a claimed file",
+			patch: "*** Begin Patch\n*** Update File: lexer.go\n*** Move to: parser.go\n@@\n-old\n+new\n" +
+				"*** End Patch\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alice := newCLI(t)
+			bob := alice.as("bob")
+			alice.mustRun("claim", "parser-panic", "--note", "the token loop", "--paths", "parser.go")
+
+			got := bob.stdin(codexEventJSON(t, bob.dir, "apply_patch", tc.patch)).run("guard")
+			if got.code != 0 {
+				t.Fatalf("exit code = %d, want 0\nstderr: %s", got.code, got.stderr)
+			}
+			if got.stdout == "" {
+				t.Fatalf("the guard said nothing about an edit to a claimed file\nstderr: %s", got.stderr)
+			}
+			said := said(decode[hookOutput](t, got).HookSpecificOutput)
+			// The file has to be named, since one call can touch several and "somebody is nearby" is not
+			// something an agent can act on.
+			for _, want := range []string{"alice", "parser-panic", "the token loop", "parser.go"} {
+				if !strings.Contains(said, want) {
+					t.Errorf("what it said does not mention %q:\n%s", want, said)
+				}
+			}
+		})
+	}
+}
+
+// TestGuardReadsEveryFileInOnePatch is what makes a patch different from an Edit. A call that touches five files
+// runs into a claim if any one of them does, and reading only the first header would miss it.
+func TestGuardReadsEveryFileInOnePatch(t *testing.T) {
+	alice := newCLI(t)
+	carol := alice.as("carol")
+	bob := alice.as("bob")
+	alice.mustRun("claim", "parser-panic", "--paths", "internal/lex/**")
+	carol.mustRun("claim", "docs-rewrite", "--paths", "README.md")
+
+	patch := "*** Begin Patch\n" +
+		"*** Update File: CHANGELOG.md\n@@\n+a line\n" +
+		"*** Update File: README.md\n@@\n+another\n" +
+		"*** Update File: internal/lex/scan.go\n@@\n+bounds check\n" +
+		"*** End Patch\n"
+	said := said(decode[hookOutput](t, bob.stdin(codexEventJSON(t, bob.dir, "apply_patch", patch)).run("guard")).HookSpecificOutput)
+
+	// Both claims, each named with the file of this call that it covers rather than with the first file in the
+	// patch, and the unclaimed file is nobody's business.
+	for _, want := range []string{"alice", "parser-panic", "scan.go", "carol", "docs-rewrite", "README.md"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("what it said does not mention %q:\n%s", want, said)
+		}
+	}
+	if strings.Contains(said, "CHANGELOG.md") {
+		t.Errorf("the notice named a file nobody claimed:\n%s", said)
+	}
+}
+
+// TestGuardDoesNotReadAShellCommandAsAPatch keeps the one rule that makes this layer tolerable. tool_input.command
+// is also where Codex puts a shell command, and a guard that read patch headers out of any command would fire on
+// a grep for one. Only apply_patch carries a patch.
+func TestGuardDoesNotReadAShellCommandAsAPatch(t *testing.T) {
+	alice := newCLI(t)
+	bob := alice.as("bob")
+	alice.mustRun("claim", "parser-panic", "--paths", "parser.go")
+
+	// A heredoc, so the markers are at the start of a line exactly as they are in a patch. A command that
+	// merely mentioned one on the same line as something else would pass whether or not the tool is checked,
+	// which is what the first version of this test did.
+	command := "cat > /tmp/notes.patch <<'PATCH'\n*** Begin Patch\n*** Update File: parser.go\n@@\n+a note\n" +
+		"*** End Patch\nPATCH\n"
+	got := bob.stdin(codexEventJSON(t, bob.dir, "Bash", command)).run("guard")
+	if got.code != 0 || got.stdout != "" {
+		t.Errorf("exit %d, stdout %q, want 0 and nothing: a shell command is not a patch", got.code, got.stdout)
+	}
+}
+
+// TestCandidatePathsSeesThroughASymlink is the bug that made the guard silent on every edit a Codex agent
+// made, found by running scripts/codex-hook-experiment.sh: the arm edited
+// /tmp/agoracodex.N6bG3C/repo/.worktrees/deny-only/parser.go while git reported the worktree as
+// /private/tmp/agoracodex.N6bG3C/..., because /tmp is a symlink on darwin. The relative path between those two
+// is full of "..", so a claim on `parser.go` matched nothing and the layer reported no overlap at all.
+//
+// The two sides come from different places and cannot be assumed to agree: agora asks git, which resolves, and
+// a harness reports whatever path it was handed.
+func TestCandidatePathsSeesThroughASymlink(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(real, "internal"), 0o755); err != nil {
+		t.Fatalf("create the worktree: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink the worktree: %v", err)
+	}
+
+	// The file as the harness names it, through the symlink, against the worktree as git reports it.
+	edited := filepath.Join(link, "internal", "lex.go")
+	got := candidatePaths(edited, link, real)
+	want := []string{edited, filepath.Join("internal", "lex.go")}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("candidatePaths(), -want +got:\n%s", diff)
+	}
+
+	// A file the edit is about to create has no path to resolve, and it still has to match: resolving the whole
+	// path would fail here and take the relative candidate with it.
+	created := filepath.Join(link, "internal", "brand-new.go")
+	got = candidatePaths(created, link, real)
+	want = []string{created, filepath.Join("internal", "brand-new.go")}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("candidatePaths() for a file that does not exist yet, -want +got:\n%s", diff)
 	}
 }
 
