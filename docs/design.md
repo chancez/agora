@@ -908,6 +908,30 @@ the arm still worth running. And `linked` was added to the scorer after the firs
 exactly that way and a two-way verdict could not see it, so every run was re-scored with the third category
 rather than some.
 
+#### And what the briefing line measured
+
+Same harness, `ARMS="before after"`, three runs each, the only difference being the line above: both arms carry
+the current standing rule, and only one has a briefing that names the thread its follow-up belongs in.
+
+| arm | continued | new thread, linked | new thread, unlinked | turn 3 separate |
+| :-- | :-- | :-- | :-- | :-- |
+| rule only | 1 of 3 | 0 of 3 | 2 of 3 | 3 of 3 |
+| rule and briefing | 1 of 3 | 2 of 3 | 0 of 3 | 3 of 3 |
+
+**It does not reduce the thread count.** One run in three kept the second fix in one thread, with the line and
+without it. What it does is remove the case where the two halves are not joined: **0 of 3 unlinked against 2 of
+3**, and across both experiments the record came out intact 3 of 3 with the line, 2 of 6 with the rule alone, and
+0 of 6 with the old rule. Fisher against the old rule is p = 0.012; against the rule alone it is p = 0.12, which
+is suggestive and no more, and the run that would sharpen it is more of the same rather than a different arm.
+
+The layer fired: the prompt hook spoke three times a run in the arms that had it, once in the arms that did not,
+which is the announce nudge on turn 1 and the routing line on turns 2 and 3. And turn 3 opened its own thread in
+6 of 6, so the second sentence holds the other direction.
+
+So the honest summary of the whole thing, across 18 sessions: **a thread per site is what an agent does, and no
+layer tried here changed that** (2 of 18 kept one thread). What is reachable is that the sites stay joined, which
+is the failure that was actually reported, and that took the two always-loaded layers rather than either alone.
+
 Three traps beyond the ones above:
 
 - **Turn 2 has to be work turn 1 did not do.** It first asked for the regression test, which a competent agent
