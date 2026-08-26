@@ -12,7 +12,7 @@
 # to put its next message are the standing rule in AGENTS.md and whatever `agora post` said back:
 #
 #   1. parser.go panics on empty input. Fix it.            -> opens a thread, correctly
-#   2. Now add the regression test for that fix.           -> the SAME work, so the same thread
+#   2. lex.go has the same empty-input bug. Fix that too.  -> one root cause, so the thread that announced it
 #   3. A different bug, in config.go.                      -> genuinely separate, so a new thread IS right
 #
 # Turn 3 is what keeps this honest. A change that taught an agent to never open a second thread would score
@@ -59,13 +59,21 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RUNS=${RUNS:-2}
 ARMS=${ARMS:-"before wording notice after"}
-# The two commits that made the change, so `before` is the shipped previous thing rather than a description of
-# it. Pass BEFORE_REF explicitly once anything else lands on top.
-BEFORE_REF=${BEFORE_REF:-HEAD~2}
+# The branch point, so `before` is the shipped previous thing rather than a description of it. A count back from
+# HEAD was wrong within an hour of being written, because committing this script moved it: the preflight below
+# caught that by finding the notice under test in the before build. Pass BEFORE_REF once this has merged.
+BEFORE_REF=${BEFORE_REF:-main}
 LOGIN_SHELL=${LOGIN_SHELL:-${SHELL:-/bin/sh}}
 
 TURN1="parser.go panics on empty input. Fix it."
-TURN2="Now add the regression test for that fix."
+# The same root cause at a second site, which is the motivating failure of the whole project: a fix scoped to
+# the one symptom its author saw. So it is one piece of work by agora's own doctrine, and it is unambiguously
+# work turn 1 did not do.
+#
+# It replaced "now add the regression test for that fix", which measured almost nothing: a competent agent
+# writes that test in turn 1, so turn 2 had nothing to do and half the arms said nothing at all. A turn that
+# cannot act cannot choose a thread, and silence is neither of the outcomes this is about.
+TURN2="lex.go has the same empty-input bug. Fix that one too."
 TURN3="Separate bug, unrelated to the parser: config.go ignores \$XDG_CONFIG_HOME and always builds the path from \$HOME. Fix that one too."
 
 command -v codex >/dev/null || { echo "codex is not on PATH" >&2; exit 1; }
@@ -119,8 +127,8 @@ fi
 echo "the standing rule differs:"
 diff -u "$SANDBOX/rule-before.md" "$SANDBOX/rule-after.md" | sed 's/^/  /' || true
 
-# One repository per run, and a fixture with two independent bugs: the parser panic for turns 1 and 2, and a
-# config path for turn 3, which is the work an agent is *right* to give its own thread.
+# One repository per run. The fixture carries one root cause at two sites, parser.go and lex.go, for turns 1 and
+# 2, plus an unrelated config path for turn 3, which is the work an agent is *right* to give its own thread.
 write_fixture() {
   local dir=$1
   mkdir -p "$dir"
@@ -138,6 +146,19 @@ import "strings"
 func Parse(input string) string {
 	fields := strings.Fields(input)
 	return fields[0]
+}
+GO
+  # The same Fields()[0] with no length check, at a second site. Turn 2's work, and one piece of work with
+  # turn 1's by agora's own doctrine: a guard in Parse alone hides one of the two.
+  cat > "$dir/lex.go" <<'GO'
+package demo
+
+import "strings"
+
+// Lex returns the last token of input.
+func Lex(input string) string {
+	fields := strings.Fields(input)
+	return fields[len(fields)-1]
 }
 GO
   cat > "$dir/config.go" <<'GO'
@@ -314,8 +335,8 @@ EOF
     echo invalid > "$dir/invalid"
     return
   fi
-  if ! ls "$repo"/*_test.go >/dev/null 2>&1; then
-    echo "  INVALID: no test file after turn 2, so the continuation never happened"
+  if cmp -s "$dir/files-before-2" "$dir/files-after-2"; then
+    echo "  INVALID: turn 2 changed nothing, so the continuation never happened"
     echo invalid > "$dir/invalid"
     return
   fi
