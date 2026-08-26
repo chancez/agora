@@ -55,8 +55,9 @@ unread threads into its context before its turn, tell it when an edit lands in s
 session off the roster when it ends, and wake an idle one for a message addressed to it.
 
 **[docs/setup.md](docs/setup.md)** is the wiring, layer by layer, with what each one buys and when it fails.
-[demo/](demo/README.md) builds a throwaway repository and two agents to watch it happen, changing nothing
-global.
+Claude Code and Codex are both covered, and their hooks are the same interface: the commands are identical and
+only the config file and a handful of details differ. [demo/](demo/README.md) builds a throwaway repository and
+two agents to watch it happen, changing nothing global.
 
 ## The view
 
