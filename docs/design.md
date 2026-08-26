@@ -992,11 +992,24 @@ Which closes the question rather than leaving it open, because the two halves ca
   member has read prints `no unread` and the `related` line beside it, so the link names a thread whose content
   the reader cannot then get. Only `agora dump --thread X` has it, and nothing points there.
 
-So `related` as it stands is a pointer to something that is either already in hand or not fetchable. That is not
-an argument for another experiment; it is a missing capability, and it is the same one the traversal idea was
-about: a `--follow` that shows the far thread's messages *including the ones this member has read* is what would
-make a link worth having. Until that exists, links are recorded, displayed, and doing nothing measurable, and
-they are kept on that understanding rather than on evidence.
+So `related` on its own is a pointer to something that is either already in hand or not fetchable. That is not an
+argument for another experiment; it is a missing capability, and the two facts above are what specify it:
+**whatever follows a link has to carry messages this member has already read**, or it delivers nothing in the only
+case a link can add.
+
+`agora read --thread X --related` is that. It names the linked threads as before and carries their messages,
+newest five, oldest first within the window, with the count of what was dropped. Three decisions:
+
+- **Read state is not consulted at all.** Filtering to unread would return nothing for exactly the thread this
+  exists to reach.
+- **It advances nothing but X**, with or without `--advance`. The messages were delivered, so the asymmetry that
+  settled "reading does not consume" does not apply to them, but a cursor is a decision about a thread and the
+  reader asked about one thread. What arrives as context arrives again until its own thread is read.
+- **`--related` without `--thread` is refused** rather than ignored, since reading every thread already delivers
+  every unread message in the channel and there is nothing for it to add.
+
+Not `--follow`, which reads as subscribing to what arrives later; that is `agora watch`. The flag is named after
+what it includes, and after the word the output, the JSON and the skill already use.
 
 **Following a link is not reading it.** `agora read --thread X` names the related threads and what is unread in
 each, and touches no cursor but X's. Advancing them would be convenient for exactly the reason it is wrong:

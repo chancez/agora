@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -176,7 +177,7 @@ func linksByThread(ctx context.Context, q queryer, channelID int64) (map[string]
 // relatedThreads is the other half of a split piece of work, as a reader of one thread sees it: the threads it
 // names or is named by, with what is unread in each. Enough to decide whether to follow the pointer, which is
 // the same standard the index itself is held to.
-func relatedThreads(ctx context.Context, q queryer, req ReadRequest, channelID int64) ([]Thread, error) {
+func relatedThreads(ctx context.Context, q queryer, req ReadRequest, channelID int64) ([]RelatedRead, error) {
 	links, err := linksByThread(ctx, q, channelID)
 	if err != nil {
 		return nil, err
@@ -199,14 +200,70 @@ func relatedThreads(ctx context.Context, q queryer, req ReadRequest, channelID i
 	}
 	// In the order the references were made rather than by activity, since that is the order somebody reading
 	// this thread met them.
-	related := make([]Thread, 0, len(names))
+	related := make([]RelatedRead, 0, len(names))
 	for _, name := range names {
-		if thread, ok := byName[name]; ok {
-			// The oldest unread message of a *related* thread is not what this call is delivering, and a
-			// briefing that carried it twice over would spend the budget on the thread nobody asked for.
-			thread.First = nil
-			related = append(related, thread)
+		thread, ok := byName[name]
+		if !ok {
+			continue
 		}
+		// The oldest unread message of a *related* thread is not what this call is delivering, and a briefing
+		// that carried it twice over would spend the budget on the thread nobody asked for.
+		thread.First = nil
+		entry := RelatedRead{Thread: thread}
+		if req.Related {
+			msgs, omitted, err := lastInThread(ctx, q, req.Channel, channelID, name, relatedWindow)
+			if err != nil {
+				return nil, err
+			}
+			entry.Messages, entry.Omitted = msgs, omitted
+		}
+		related = append(related, entry)
 	}
 	return related, nil
+}
+
+// relatedWindow bounds what one related thread contributes. Bounded for the reason everything here is: hook
+// output over 10000 characters is replaced by a preview, and a thread somebody has worked all day has no natural
+// length. Newest kept, since a truncated history is more useful from the recent end.
+const relatedWindow = 5
+
+// lastInThread is the newest messages in a thread whatever this member has read, returned oldest first, with how
+// many older ones were left out. Read state is deliberately not consulted: the case a link exists for is a thread
+// this member has already read, and filtering to unread there returns nothing at all.
+func lastInThread(ctx context.Context, q queryer, channel string, channelID int64, thread string, window int) ([]Message, int, error) {
+	var total int
+	if err := q.QueryRowContext(ctx,
+		`SELECT count(*) FROM messages WHERE channel_id = ? AND thread = ?`, channelID, thread,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count %q: %w", thread, err)
+	}
+	rows, err := q.QueryContext(ctx, `
+SELECT `+messageColumns+`
+FROM messages m WHERE m.channel_id = ? AND m.thread = ?
+ORDER BY m.seq DESC
+LIMIT ?`, channelID, thread, window)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read %q: %w", thread, err)
+	}
+	defer rows.Close()
+	var msgs []Message
+	for rows.Next() {
+		msg := Message{Channel: channel}
+		var created int64
+		if err := rows.Scan(&msg.Seq, &msg.Thread, &msg.Author, &msg.Body, &created, &msg.Number); err != nil {
+			return nil, 0, fmt.Errorf("read %q: %w", thread, err)
+		}
+		msg.CreatedAt = fromDBTime(created)
+		msgs = append(msgs, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read %q: %w", thread, err)
+	}
+	// Newest first out of the database so the window keeps the recent end, oldest first for a reader.
+	slices.Reverse(msgs)
+	omitted := total - len(msgs)
+	if omitted < 0 {
+		omitted = 0
+	}
+	return msgs, omitted, nil
 }

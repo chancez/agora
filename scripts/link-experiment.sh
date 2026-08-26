@@ -20,8 +20,8 @@
 # check, and the planted note says a guard in Parse alone hides the other two, which is this project's motivating
 # failure: a fix scoped to the one symptom its author saw.
 #
-#   before   the last build without links, where the pointer is prose and nothing surfaces it
-#   after    the working tree, where `agora read --thread parser-panic` names lexer-panic and its unread
+#   before   BEFORE_REF's build, which cannot reach the far thread from the pointer thread in one command
+#   after    the working tree, which can: `agora read --thread parser-panic --related`
 #
 # The binary and the skill move together, because they ship together and an agent gets both. If this separates
 # the arms, which half did it is the next experiment rather than this one.
@@ -30,17 +30,21 @@
 # finding having arrived. The transcript is read for whether lexer-panic was opened at all, which is the
 # mechanism, but the files are what count: injected context never appears on screen.
 #
-# **This is a hard experiment and the expectation is written down before running it.** The control can reach the
-# information two ways: `agora threads` lists every thread, read or not, and the briefing quotes parser-panic's
-# unread message, which *is* the pointer, so both arms are told the name lexer-panic in prose. What the link adds
-# is therefore not reach but structure: a field, with the unread count, on the thread the agent is already
-# reading. So a null here means the link is redundant *for a pointer that is already in context*, which is worth
-# knowing and is not the same as pointers going nowhere. The case where it would add reach, and which this does
-# not test, is a pointer nothing quotes: an old message in a long thread, or a channel with more unread threads
-# than the briefing's limit.
+# **The expectation is written down before each run, because this measures a moving variable and the first two
+# generations of it were null.** What the control can reach is the whole difficulty:
 #
-# The one leak that would make it measure nothing is the briefing carrying the *finding* rather than the pointer,
-# which is checked per run and printed, not reasoned about. It caught a claim: agora reports standing claims on
+#   1. `agora threads --unread` has no limit, so every unread thread is listed with its oldest message, and a bare
+#      `agora read` hands over every unread message in the channel. Nothing about an unread thread needs a pointer,
+#      which is why both earlier plants were null at 12 of 12.
+#   2. So the only thread a link can add is one this member has already read, and until `--related` existed,
+#      `agora read --thread X` on that printed "no unread". The pointer named something unfetchable.
+#
+# This run is therefore not about the link being recorded but about `--related` carrying messages the member has
+# read. The plant check below states it that way, per arm, in one command: can this build get the finding out of
+# the far thread starting from the thread the briefing delivers?
+#
+# The leak that would make it measure nothing is the briefing carrying the *finding* rather than the pointer,
+# checked per run and printed rather than reasoned about. It caught a claim: agora reports standing claims on
 # SessionStart with their notes and paths, so a claim covering all three files handed every arm the answer.
 #
 # One trap of its own, and it cost six minutes of a run staring at nothing: **codex exec reads stdin when it is
@@ -66,8 +70,9 @@ PLANT=${PLANT:-buried}
 # Enough unread threads that the briefing's limit of 10 cuts the oldest, which is where lexer-panic goes. The
 # index keeps the most recently active, so what falls off the end is chosen by when each thread last moved.
 NOISE=${NOISE:-10}
-# The commit before links, so `before` is the shipped previous thing rather than a description of it.
-BEFORE_REF=${BEFORE_REF:-03b5717}
+# The commit before the layer under test, so `before` is the shipped previous thing rather than a description of
+# it. Pass it: this script has measured three different variables and each moved the baseline.
+BEFORE_REF=${BEFORE_REF:-HEAD}
 LOGIN_SHELL=${LOGIN_SHELL:-${SHELL:-/bin/sh}}
 TASK="parser.go panics on empty input. Fix it."
 
@@ -84,37 +89,31 @@ trap 'git -C "$REPO_ROOT" worktree remove --force "$SANDBOX/before-src" 2>/dev/n
 ( cd "$REPO_ROOT" && go build -o "$SANDBOX/agora-after" ./cmd/agora )
 
 # Prove the arms differ before spending tokens, on the layer under test rather than on any string in the binary.
-MARKER=${MARKER:-'related: '}
+MARKER=${MARKER:-'needs --thread'}
 for build in before after; do
   found=$(strings "$SANDBOX/agora-$build" | grep -c "$MARKER" || true)
   echo "agora-$build: layer under test $found"
   case $build in
-    before) [ "$found" = "0" ] || { echo "the before build already links threads, so BEFORE_REF is wrong" >&2; exit 1; } ;;
-    after)  [ "$found" != "0" ] || { echo "the after build does not link threads" >&2; exit 1; } ;;
+    before) [ "$found" = "0" ] || { echo "the before build already has the layer under test, so BEFORE_REF is wrong" >&2; exit 1; } ;;
+    after)  [ "$found" != "0" ] || { echo "the after build does not have the layer under test, so MARKER is wrong" >&2; exit 1; } ;;
   esac
 done
 
-# And prove the plant works, without a model: the before build must not surface the link and the after build must,
-# from the same channel. This is the check that would have caught a plant whose pointer nothing could follow.
+# Whether this arm can get the *finding* out of the far thread, starting from the thread the briefing delivers, in
+# one command. That is the mechanism under test, and stating it this way survives the variable moving, which it has
+# done twice: it was the pointer being recorded at all, and it is now whether following one carries messages this
+# member has already read. FINDING is the sentence only lexer-panic contains.
+FINDING=${FINDING:-'Parse, Lex and Format'}
 verify_plant() {
   local agora=$1 db=$2 channel=$3 member=$4 expect=$5
   local out
-  out=$("$agora" --db "$db" --channel "$channel" --as "$member" --text read --thread parser-panic)
+  out=$("$agora" --db "$db" --channel "$channel" --as "$member" --text read --thread parser-panic --related 2>&1 || true)
   case $expect in
-    linked) case "$out" in *"related: lexer-panic"*) ;; *) echo "the after build did not surface the link:"; echo "$out"; return 1 ;; esac ;;
-    prose)  case "$out" in *"related: lexer-panic"*) echo "the before build surfaced a link it cannot have"; return 1 ;; esac ;;
-  esac
-  case $PLANT in
-    quoted)
-      # The pointer is the unread message, so reading the thread hands it over whatever the build.
-      case "$out" in *lexer-panic*) ;; *) echo "the plant does not name lexer-panic at all:"; echo "$out"; return 1 ;; esac
+    carries)
+      case "$out" in *"$FINDING"*) ;; *) echo "this arm cannot reach the finding from the pointer thread:"; echo "$out"; return 1 ;; esac
       ;;
-    buried)
-      # And here it must not: the pointer is already read, so `read` does not show it, and the before arm gets
-      # nothing. If this arm names lexer-panic without a link, the isolation this plant exists for is gone.
-      if [ "$expect" = prose ]; then
-        case "$out" in *lexer-panic*) echo "the before build reaches lexer-panic anyway:"; echo "$out"; return 1 ;; esac
-      fi
+    cannot)
+      case "$out" in *"$FINDING"*) echo "the control reaches the finding in one command, so there is nothing to measure:"; echo "$out"; return 1 ;; esac
       ;;
   esac
 }
@@ -261,8 +260,8 @@ PY
     echo invalid > "$dir/invalid"
     return
   fi
-  local expect=prose
-  [ "$arm" = after ] && expect=linked
+  local expect=cannot
+  [ "$arm" = after ] && expect=carries
   if ! verify_plant "$agora" "$db" "$channel" "$member" "$expect" | sed 's/^/  /'; then
     echo "  INVALID: the plant is not what this arm is supposed to measure"
     echo invalid > "$dir/invalid"

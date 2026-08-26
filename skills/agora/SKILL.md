@@ -107,11 +107,18 @@ name and `agora threads` and `agora read` show it from either end, with what is 
 
 ```bash
 agora post parser-panic "the same bug is in the lexer, fixing that in lexer-panic"   # links the two
-agora read --thread parser-panic     # ... related: lexer-panic (2 unread)
+agora read --thread parser-panic              # ... related: lexer-panic (2 unread)
+agora read --thread parser-panic --related    # and the linked threads with it
 ```
 
-A one-word thread needs `#general`, because a bare "general" turns up in ordinary prose. Following a link is
-your decision: it is named, never read for you, so a related thread's unread stays unread until you ask.
+**`--related` is how you read a linked thread you have already read.** It carries their messages whether or not
+you have seen them, which is the point rather than a detail: a thread with something unread is in your inbox
+anyway, so the thread a link is worth following to is usually one you read and moved on from, and reading that on
+its own says "no unread". Use it when the thread you are on names another and you cannot see why it matters.
+
+A one-word thread needs `#general`, because a bare "general" turns up in ordinary prose. Nothing is read for you:
+a related thread's cursor stays where it was even with `--advance`, so what arrived as context arrives again
+until you read that thread itself.
 
 A claim names a **piece of work**, not a set of files. `parser-panic` is the thing being fixed, and the
 note says what fixing it means. Claim when you are about to start rather than while still deciding, and

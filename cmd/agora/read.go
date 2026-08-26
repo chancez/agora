@@ -15,6 +15,7 @@ func newReadCmd(a *app) *cobra.Command {
 	var (
 		thread  string
 		advance bool
+		related bool
 		limit   int
 	)
 	cmd := &cobra.Command{
@@ -34,6 +35,12 @@ looks like:
     agora read --thread parser-panic --advance   # this one matters, so read it
     agora ack docs-rewrite                       # this one does not
 
+--related reads the threads this one is linked to as well, which is how the other half of
+work that got split arrives. It carries what you have already read in them, and that is
+the point rather than a detail: a thread with something unread is in your inbox already,
+so the only thread a link can add is one you have read, and reading that on its own says
+"no unread". It moves no cursor but this thread's, with or without --advance.
+
 --limit caps how many come back and reports what was left behind. A hook should pass one:
 hook output over 10000 characters is spilled to a file and replaced with a preview.`,
 		Args: cobra.NoArgs,
@@ -42,11 +49,17 @@ hook output over 10000 characters is spilled to a file and replaced with a previ
 			if err != nil {
 				return err
 			}
+			if related && thread == "" {
+				// Reading every thread already delivers every unread message in the channel, so there is
+				// nothing for this to add and a caller asking for it has misunderstood what it does.
+				return fmt.Errorf("--related needs --thread: a read of every thread already carries every unread message")
+			}
 			result, err := s.Read(cmd.Context(), store.ReadRequest{
 				Channel:  cfg.Channel.Value,
 				Member:   cfg.Member.Value,
 				Thread:   thread,
 				Advance:  advance,
+				Related:  related,
 				Limit:    limit,
 				Worktree: &cfg.Worktree.Value,
 			})
@@ -64,6 +77,8 @@ hook output over 10000 characters is spilled to a file and replaced with a previ
 	}
 	cmd.Flags().StringVar(&thread, "thread", "", "only this thread, leaving every other thread's unread alone")
 	cmd.Flags().BoolVar(&advance, "advance", false, "mark the messages read by moving the cursor")
+	cmd.Flags().BoolVar(&related, "related", false,
+		"read the threads this one is linked to as well, including what you have already read in them")
 	cmd.Flags().IntVar(&limit, "limit", 0, "return at most N messages, 0 for all of them")
 	return cmd
 }
@@ -99,23 +114,47 @@ func writeUnread(w io.Writer, result store.ReadResult, advanced bool) {
 // writeRelated names the other half of work that got split. Nothing in it was read and no cursor moved, so it
 // says what is waiting rather than showing it: following the pointer is the reader's decision, and one read that
 // silently consumed two threads would be the failure the display and advance split exists to prevent.
-func writeRelated(w io.Writer, related []store.Thread) {
+func writeRelated(w io.Writer, related []store.RelatedRead) {
 	if len(related) == 0 {
 		return
 	}
 	names := make([]string, 0, len(related))
-	for _, thread := range related {
+	carried := false
+	for _, entry := range related {
 		state := "nothing unread"
-		if thread.Unread > 0 {
-			state = fmt.Sprintf("%d unread", thread.Unread)
+		if entry.Thread.Unread > 0 {
+			state = fmt.Sprintf("%d unread", entry.Thread.Unread)
 		}
-		if thread.Muted {
+		if entry.Thread.Muted {
 			state += ", muted"
 		}
-		names = append(names, fmt.Sprintf("%s (%s)", thread.Name, state))
+		names = append(names, fmt.Sprintf("%s (%s)", entry.Thread.Name, state))
+		carried = carried || len(entry.Messages) > 0
 	}
 	fmt.Fprintf(w, "related: %s\n", strings.Join(names, ", "))
-	fmt.Fprintf(w, "  `agora read --thread %s` to follow one, nothing here was read\n", related[0].Name)
+	if !carried {
+		fmt.Fprintf(w, "  `agora read --thread %s --related` to read one with it, nothing here was read\n",
+			related[0].Thread.Name)
+		return
+	}
+	for _, entry := range related {
+		if len(entry.Messages) == 0 {
+			continue
+		}
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  from %s", entry.Thread.Name)
+		if entry.Omitted > 0 {
+			fmt.Fprintf(w, ", %s before these", plural(entry.Omitted, "message"))
+		}
+		fmt.Fprintln(w, ":")
+		for _, msg := range entry.Messages {
+			writeMessage(w, msg)
+		}
+	}
+	fmt.Fprintln(w)
+	// Said because it is the surprising half: these were delivered and none of them was marked read, so they
+	// arrive again next turn unless their own thread is read.
+	fmt.Fprintf(w, "nothing in the related threads was marked read; `agora read --thread NAME --advance` does that\n")
 }
 
 // threadList names the threads a cursor moved on, sorted so the output does not vary between runs.

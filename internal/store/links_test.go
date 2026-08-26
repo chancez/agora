@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -152,5 +153,41 @@ func TestAFullStopEndsASentenceNotAThreadName(t *testing.T) {
 	}
 	if byName["docs-rewrite"] != nil {
 		t.Errorf("a filename linked docs-rewrite to %v, want nothing", byName["docs-rewrite"])
+	}
+}
+
+// TestRelatedIsBoundedAndKeepsTheRecentEnd pins what one related thread contributes. Bounded for the reason
+// everything reaching a model here is: hook output over 10000 characters is replaced by a preview, and a thread
+// somebody has worked all day has no natural length. The newest are kept, the same choice dump makes.
+func TestRelatedIsBoundedAndKeepsTheRecentEnd(t *testing.T) {
+	s, clock := newStore(t)
+	post(t, s, "repo", "alice", "parser-panic", "the root cause is in lexer-panic")
+	for i := 1; i <= 7; i++ {
+		clock.advance(time.Minute)
+		post(t, s, "repo", "alice", "lexer-panic", fmt.Sprintf("step %d", i))
+	}
+
+	got, err := s.Read(t.Context(), store.ReadRequest{
+		Channel: "repo", Member: "carol", Thread: "parser-panic", Related: true,
+	})
+	if err != nil {
+		t.Fatalf("Read(): %v", err)
+	}
+	if len(got.Related) != 1 {
+		t.Fatalf("Read() returned %d related threads, want 1", len(got.Related))
+	}
+	entry := got.Related[0]
+	bodies := make([]string, 0, len(entry.Messages))
+	for _, msg := range entry.Messages {
+		bodies = append(bodies, msg.Body)
+	}
+	// The last five, oldest first within the window, and the two it dropped counted rather than hidden: a
+	// truncated thread that looks short is worse than one that says where it stopped.
+	want := []string{"step 3", "step 4", "step 5", "step 6", "step 7"}
+	if diff := cmp.Diff(want, bodies); diff != "" {
+		t.Errorf("the related thread's window, -want +got:\n%s", diff)
+	}
+	if entry.Omitted != 2 {
+		t.Errorf("omitted = %d, want the 2 older messages counted", entry.Omitted)
 	}
 }

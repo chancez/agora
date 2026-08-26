@@ -268,12 +268,12 @@ func TestAReaderOfEitherHalfFindsTheOther(t *testing.T) {
 	alice.mustRun("post", "lex-empty-input", "fixing Lex the same way")
 
 	from := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "parser-empty-input"))
-	if len(from.Related) != 1 || from.Related[0].Name != "lex-empty-input" || from.Related[0].Unread != 1 {
+	if len(from.Related) != 1 || from.Related[0].Thread.Name != "lex-empty-input" || from.Related[0].Thread.Unread != 1 {
 		t.Errorf("reading parser-empty-input did not offer lex-empty-input with its unread: %+v", from.Related)
 	}
 	// The far end reports the link too, though nobody wrote a word in it about the parser.
 	to := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "lex-empty-input"))
-	if len(to.Related) != 1 || to.Related[0].Name != "parser-empty-input" {
+	if len(to.Related) != 1 || to.Related[0].Thread.Name != "parser-empty-input" {
 		t.Errorf("reading lex-empty-input did not offer parser-empty-input: %+v", to.Related)
 	}
 
@@ -293,5 +293,70 @@ func TestAReaderOfEitherHalfFindsTheOther(t *testing.T) {
 	text := carol.mustRun("--text", "threads").stdout
 	if !strings.Contains(text, "related: lex-empty-input") {
 		t.Errorf("agora --text threads does not show the link:\n%s", text)
+	}
+}
+
+// TestRelatedReadsTheHalfYouAlreadyRead is the whole reason the flag exists, and the reason the plain link was
+// measured doing nothing. Two facts fix the design: a thread with something unread is in the triage list and in a
+// bare read already, so a link cannot add reach to it; and `read --thread` on a thread this member has read prints
+// "no unread", so a link to that one delivers nothing. The only thread a link can add is one that has been read,
+// which means --related has to carry read messages or carry nothing at all.
+func TestRelatedReadsTheHalfYouAlreadyRead(t *testing.T) {
+	alice := newCLI(t)
+	carol := alice.as("carol")
+	alice.mustRun("post", "lexer-panic", "three call sites index the empty slice: Parse, Lex and Format")
+	alice.mustRun("post", "parser-panic", "the root cause is in lexer-panic")
+	// Carol has been here: she read the far thread and the pointer, and only a bump is waiting for her.
+	carol.mustRun("ack", "--all")
+	alice.mustRun("post", "parser-panic", "bumping this, the Parse panic is still open")
+
+	// Without the flag, the far thread is named and nothing of it arrives.
+	named := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "parser-panic"))
+	if len(named.Related) != 1 || len(named.Related[0].Messages) != 0 {
+		t.Errorf("a plain read carried the related thread's messages: %+v", named.Related)
+	}
+	// And reading the far thread on its own is the dead end this replaces.
+	if empty := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "lexer-panic")); len(empty.Messages) != 0 {
+		t.Errorf("reading an already-read thread returned %d messages, want the dead end this is about",
+			len(empty.Messages))
+	}
+
+	got := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "parser-panic", "--related"))
+	if len(got.Related) != 1 {
+		t.Fatalf("--related returned %d related threads, want 1: %+v", len(got.Related), got.Related)
+	}
+	entry := got.Related[0]
+	if len(entry.Messages) != 1 || entry.Omitted != 0 {
+		t.Fatalf("--related carried %d messages, %d omitted, want the one read message: %+v",
+			len(entry.Messages), entry.Omitted, entry.Messages)
+	}
+	if !strings.Contains(entry.Messages[0].Body, "Parse, Lex and Format") {
+		t.Errorf("--related did not carry the finding: %q", entry.Messages[0].Body)
+	}
+
+	// It moves no cursor but this thread's, even with --advance. The messages were delivered, but the thread they
+	// came from is not the one the reader asked to read, and a cursor is a decision about a thread.
+	before := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "lexer-panic")).Cursors["lexer-panic"]
+	alice.mustRun("post", "lexer-panic", "and Format is the one everybody forgets")
+	carol.mustRun("read", "--thread", "parser-panic", "--related", "--advance")
+	after := decode[store.ReadResult](t, carol.mustRun("read", "--thread", "lexer-panic"))
+	if after.Cursors["lexer-panic"] != before {
+		t.Errorf("lexer-panic's cursor moved from %d to %d, want reading parser-panic to leave it alone",
+			before, after.Cursors["lexer-panic"])
+	}
+	if len(after.Messages) != 1 {
+		t.Errorf("lexer-panic has %d unread after being carried along, want the new message still waiting",
+			len(after.Messages))
+	}
+
+	text := carol.mustRun("--text", "read", "--thread", "parser-panic", "--related").stdout
+	for _, want := range []string{"from lexer-panic", "Parse, Lex and Format", "nothing in the related threads was marked read"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("--text --related is missing %q:\n%s", want, text)
+		}
+	}
+	// And it refuses the combination that would mean nothing.
+	if got := carol.run("read", "--related"); got.code != 1 {
+		t.Errorf("exit code = %d, want 1 for --related without --thread", got.code)
 	}
 }

@@ -224,7 +224,15 @@ type ReadRequest struct {
 	// Limit caps how many messages come back, 0 meaning no cap. A hook needs this because hook output over
 	// 10000 characters is spilled to a file and replaced with a preview, which silently stops delivering
 	// the messages it was added to deliver.
-	Limit    int
+	Limit int
+	// Related asks for the threads this one is linked to as well, with their messages, *including* the ones this
+	// member has already read. Without that last part a link is a pointer to nothing: measured, a thread with
+	// something unread is already in the triage list and in a bare read, so the only thread a link can add is one
+	// that has been read, and `read --thread` on that says "no unread".
+	//
+	// It needs Thread. Reading every thread already delivers every unread message in the channel, so there is
+	// nothing for it to add there.
+	Related  bool
 	Worktree *string
 }
 
@@ -240,9 +248,22 @@ type ReadResult struct {
 	// Cursors is where each thread's cursor stands after the call, so a caller can tell a peek from an
 	// advance from the result alone.
 	Cursors map[string]int64 `json:"cursors"`
-	// Related is the threads this one names or is named by, with what is unread in each, filled in when one
-	// thread was asked for. Their cursors are untouched: reading one thread must not mark another read.
-	Related []Thread `json:"related,omitempty"`
+	// Related is the threads this one names or is named by, filled in when one thread was asked for. Their
+	// cursors are untouched, with or without --related: reading one thread must not mark another read.
+	Related []RelatedRead `json:"related,omitempty"`
+}
+
+// RelatedRead is a linked thread as a reader meets it: what the index says about it, and its messages when
+// --related asked for them. Nested rather than embedded because a thread's message *count* and its messages want
+// the same name.
+type RelatedRead struct {
+	Thread Thread `json:"thread"`
+	// Messages is empty unless --related asked, and carries what this member has already read as well as what it
+	// has not. Oldest first within the window, newest kept when there are more than the window holds, which is
+	// the same choice dump makes: a truncated history is more useful from the recent end.
+	Messages []Message `json:"messages,omitempty"`
+	// Omitted counts what the window left out, so a truncated thread does not read as a short one.
+	Omitted int `json:"omitted,omitempty"`
 }
 
 // AckRequest marks threads read without reading them, which is the other half of triage: deciding a thread
