@@ -970,11 +970,33 @@ outcome this was expected to have and the reason the expectation was written int
 briefing quotes the message carrying the pointer, so both arms are told the name and the link adds structure
 rather than reach. The site counts differ the wrong way for the change and n is 3, so that is noise.
 
-By the standard that removed the post-time notice, the honest state of links is: a capability with a null against
-the case measured, kept only for the case that has not been. That case is a pointer nothing quotes, which a long
-channel produces on its own: the reference was message 3 of a thread whose unread starts at message 8, so nothing
-in context names the far thread and `related` is the only route to it. Measuring that means burying the pointer in
-an already-read message, and until it is measured this is a feature resting on a mechanism.
+So the case links were built for was measured too, with the pointer buried: an already-read message of
+`parser-panic` carries it, so neither the briefing nor `agora read` shows it, and `lexer-panic` is pushed off the
+end of the briefing by ten unrelated threads. Nothing in the control's context names the far thread.
+
+| arm | all three sites | 2 of 3 | Parse alone | read the far thread |
+| :-- | :-- | :-- | :-- | :-- |
+| before, pointer buried and unreachable in context | 3 of 3 | 0 | 0 | 3 of 3 |
+| after, `related` the only route in context | 3 of 3 | 0 | 0 | 3 of 3 |
+
+**Every arm of both plants found it, 12 of 12.** The control's first command was `agora threads --unread`, and that
+is the whole answer: **the triage command has no limit**, so it lists every unread thread with its oldest message,
+and a bare `agora read` hands over every unread message in the channel. Measured on a channel of 12 unread
+threads: 12 listed, 12 delivered. The briefing truncates at 10; nothing else does.
+
+Which closes the question rather than leaving it open, because the two halves cannot both be satisfied:
+
+- **A thread with something unread needs no pointer.** It is already in the triage list and in a bare read, so a
+  link cannot add reach to it. Only relevance, and agents picked the relevant thread out of twelve unaided.
+- **A thread with nothing unread cannot be delivered by following one.** `agora read --thread X` on a thread this
+  member has read prints `no unread` and the `related` line beside it, so the link names a thread whose content
+  the reader cannot then get. Only `agora dump --thread X` has it, and nothing points there.
+
+So `related` as it stands is a pointer to something that is either already in hand or not fetchable. That is not
+an argument for another experiment; it is a missing capability, and it is the same one the traversal idea was
+about: a `--follow` that shows the far thread's messages *including the ones this member has read* is what would
+make a link worth having. Until that exists, links are recorded, displayed, and doing nothing measurable, and
+they are kept on that understanding rather than on evidence.
 
 **Following a link is not reading it.** `agora read --thread X` names the related threads and what is unread in
 each, and touches no cursor but X's. Advancing them would be convenient for exactly the reason it is wrong:
