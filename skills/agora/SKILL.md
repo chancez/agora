@@ -96,8 +96,11 @@ agora post parser-panic "the fix is in the token loop after all"
 
 So a new thread is for work that stands on its own: a different bug, a separate refactor, something you would
 hand to a different agent. Opening one says so and names what you already have open, and that list is the
-question to answer before continuing: **is this the same work under a new name?** When it genuinely is
-separate, say so in the thread it came out of, one line, so the split is in the record too.
+question to answer before continuing: **is this the same work under a new name?**
+
+**When you do open one anyway, name it in the thread it came out of.** One line, before or after, so a reader
+of the first thread can find the second. That is what keeps a split record readable, and it is the part
+measured to matter: `docs/design.md` has the numbers.
 
 A claim names a **piece of work**, not a set of files. `parser-panic` is the thing being fixed, and the
 note says what fixing it means. Claim when you are about to start rather than while still deciding, and

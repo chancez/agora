@@ -847,9 +847,52 @@ briefing, which would put three lines in context every turn for the rest of a se
 posting the channel is meant not to carry; and refusing the post, which would gate the half that is already
 worth having, since the message is fine and only its address is in question.
 
-Not yet measured on a live agent. The file states that would settle it are two threads for one piece of work
-against one, and `scripts/announce-experiment.sh` is the harness to extend, since its plant already leaves a
-channel where any thread was opened by the agent.
+#### What it measured, which is not what it was built for
+
+`scripts/thread-experiment.sh` is three turns in one Codex session: fix `parser.go`, then fix the same
+unchecked `Fields()[0]` in `lex.go`, then an unrelated `config.go`. Turn 2 is one piece of work with turn 1's by
+this project's own doctrine, since a fix scoped to the one symptom its author saw is the failure agora exists
+for. Turn 3 is genuinely separate and keeps the result honest: a change that taught an agent never to open a
+second thread would score perfectly on turn 2 and be worse than what it replaced.
+
+Four arms, because the wording and the build are two things that ship together, three runs each.
+
+| arm | wording | build | turn 2 in one thread | new thread, linked | new thread, unlinked | turn 3 separate |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| before | old | old | 0 of 3 | 0 of 3 | 3 of 3 | 3 of 3 |
+| wording | new | old | 0 of 3 | 1 of 3 | 2 of 3 | 3 of 3 |
+| notice | old | new | 0 of 3 | 0 of 3 | 3 of 3 | 3 of 3 |
+| after | new | new | 0 of 3 | 3 of 3 | 0 of 3 | 3 of 3 |
+
+**No arm kept turn 2 in one thread, 0 of 12.** An agent treats a second file as its own thread whatever the
+instruction says, and "the next step of something you already announced goes in the thread that announced it"
+did not move that decision once. What the change moves is the *link*: `before` left two threads with nothing
+joining them 3 of 3, and `after` posted the second thread's name into the first 3 of 3, before opening it. Half
+a record is only half if a reader of one half cannot find the other, so that is the failure closing, arrived at
+a different way than intended.
+
+**The notice cannot be what did it, and did not behave as though it were.** Every pointer was posted *before*
+the new thread existed, and the notice only fires once one is opened, so it always arrives after the decision it
+was meant to inform. The arm that had it without the new wording linked 0 of 3, and this is not an unfired
+layer: `open_threads` reached the model twice per run in both arms carrying it, naming the thread the agent had
+open, and nothing came of it. It is kept because it costs one query and is correct when it fires, not because it
+was measured to work.
+
+Two things this cannot separate. The `wording` arm is confounded, because the new rule names `agora threads
+--mine` and the old build has no such flag, so that command failed in 2 of its 3 runs: prose without the flag is
+the arm still worth running. And `linked` was added to the scorer after the first run, where the arms differed in
+exactly that way and a two-way verdict could not see it, so every run was re-scored with the third category
+rather than some.
+
+Three traps beyond the ones above:
+
+- **Turn 2 has to be work turn 1 did not do.** It first asked for the regression test, which a competent agent
+  writes in turn 1, so half the arms said nothing at all in turn 2. A turn that cannot act cannot choose a
+  thread, and silence is neither outcome.
+- **`codex exec resume` takes neither `-s` nor `--add-dir`.** With the sandbox passed as a flag on turn 1 only,
+  turns 2 and 3 run under a different sandbox than turn 1, so it goes in the arm's `config.toml` instead.
+- **A channel per run rather than per script.** Every arm here opens threads, so one shared channel offers the
+  next arm somebody else's thread to post into, and an agent reusing one is not the thing being measured.
 
 ### 6. Waking, which is the only one nothing else covers
 

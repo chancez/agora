@@ -373,12 +373,22 @@ for m in messages:
 opened = set().union(*threads.values()) | {c["thread"] for c in claims}
 new_in_2 = threads[2] - threads[1]
 new_in_3 = threads[3] - threads[1] - threads[2]
+# A second thread whose name is posted back into the first is not the failure this is about: half a record is
+# only half if a reader of one half cannot find the other. Detected by name, because the pointer is prose and
+# the thread name is the address. This category was added after the first run, where the arms differed in
+# exactly this way and the scorer could not see it, so every arm is re-scored with it rather than some.
+linked = bool(new_in_2) and any(
+    m["thread"] in threads[1] and any(name in m["body"] for name in new_in_2)
+    for m in messages if turn_of(m["seq"]) == 2
+)
 if len(authors) > 1:
     verdict = "IDENTITY SPLIT: " + ",".join(sorted(authors))
 elif not threads[1]:
     verdict = "invalid: opened nothing in turn 1"
 elif not threads[2]:
     verdict = "silent in turn 2"
+elif new_in_2 and linked:
+    verdict = "LINKED: " + ",".join(sorted(new_in_2))
 elif new_in_2:
     verdict = "SPLIT: " + ",".join(sorted(new_in_2))
 else:
@@ -424,12 +434,12 @@ done
 
 echo
 echo "=== verdict"
-echo "arm      continued  split  silent  invalid  separated-turn-3"
+echo "arm      continued  linked  split  silent  invalid  separated-turn-3"
 for arm in $ARMS; do
   python3 - "$SANDBOX" "$arm" "$RUNS" <<'PY'
 import json, os, sys
 sandbox, arm, runs = sys.argv[1], sys.argv[2], int(sys.argv[3])
-counts = {"continued": 0, "split": 0, "silent": 0, "invalid": 0}
+counts = {"continued": 0, "linked": 0, "split": 0, "silent": 0, "invalid": 0}
 separated = 0
 for run in range(1, runs + 1):
     dir = f"{sandbox}/{arm}-{run}"
@@ -440,6 +450,8 @@ for run in range(1, runs + 1):
     v = s["verdict"]
     if v == "continued":
         counts["continued"] += 1
+    elif v.startswith("LINKED"):
+        counts["linked"] += 1
     elif v.startswith("SPLIT"):
         counts["split"] += 1
     elif v.startswith("silent"):
@@ -447,11 +459,12 @@ for run in range(1, runs + 1):
     else:
         counts["invalid"] += 1
     separated += bool(s["separated"])
-print(f"{arm:<8} {counts['continued']:>9}  {counts['split']:>5}  {counts['silent']:>6}  "
-      f"{counts['invalid']:>7}  {separated:>16}")
+print(f"{arm:<8} {counts['continued']:>9}  {counts['linked']:>6}  {counts['split']:>5}  "
+      f"{counts['silent']:>6}  {counts['invalid']:>7}  {separated:>16}")
 PY
 done
 echo
 echo "continued: turn 2 went into the thread turn 1 opened, which is the behaviour under test."
+echo "linked:    turn 2 opened a thread and named it in the first one, so neither half of the record is lost."
 echo "separated: turn 3 opened its own thread, which is correct and is what a change must not suppress."
 echo "transcripts, channels and hook logs are under $SANDBOX"
