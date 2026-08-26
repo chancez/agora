@@ -338,9 +338,14 @@ do Y and now does X", except in a decision record where the rejected alternative
   everybody watching the channel.
 - **Unread never names a member's own threads.** Your own messages are read the moment you write them, so a
   thread only you have spoken in cannot reach you through anything built on `UnreadThreads`, the briefing
-  included. That is why the notice about opening a thread you already have an equivalent of lives in `agora
-  post` rather than in a hook, and why `ThreadsRequest.Author` exists at all. A layer that has to tell a
-  member about its own state cannot be built on its inbox.
+  included. A layer that has to tell a member about its own state cannot be built on its inbox, which is what
+  `ThreadsRequest.Author` and `agora threads --mine` are for.
+- **A signal in a command's output arrives after the decision it was meant to inform.** `agora post` used to
+  name your own open threads when it opened one, and it was measured doing nothing: agents that linked a new
+  thread to an old one posted the link *before* opening the new thread, so the output came too late every time,
+  and the arm carrying it without the standing rule linked 0 of 3. The layer that moved them was `AGENTS.md`,
+  which is in context before they act. Prefer the always-loaded rule for anything that has to change a
+  decision, and keep command output for reporting what happened.
 - **bubbletea calls `Init` before the first `WindowSizeMsg`.** So anything `Init` computes from the window size
   computes it from the 80x24 fallback, and at 80 columns the roster is not a column at all. That is how a saved
   roster width came back at the 8 column minimum every session while the saved channels width, which still fits

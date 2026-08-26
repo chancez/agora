@@ -840,12 +840,16 @@ your own messages are read the moment you write them, so a thread only you have 
 briefing that would otherwise mention it. The announce nudge is no help either, since it stops for good once
 the member posts once, which is exactly one thread too early.
 
-So the report goes where the mistake is made. `agora post` to a name nobody has used says it opened a thread
-and names the author's own threads, three at most, newest first, with the age of each. Facts and no gate, the
-same shape as a lost claim naming its holder. Two rejected alternatives: naming them in the per-prompt
-briefing, which would put three lines in context every turn for the rest of a session and invites the status
-posting the channel is meant not to carry; and refusing the post, which would gate the half that is already
-worth having, since the message is fine and only its address is in question.
+The first attempt put the report where the mistake is made: `agora post` to a name nobody had used said it
+opened a thread and named the author's own threads, three at most, newest first. **It was measured doing
+nothing and was removed**, and the reason it could not work is worth more than the code was. A command's
+output arrives after the command, and by then the agent has already decided where to write. Every agent that
+linked its second thread to its first posted the link *before* opening the second, so there was no run in which
+the notice could have been what informed it. What is left of it is `ThreadsRequest.Author` and `agora threads
+--mine`, which agents did use, three times a run, once the standing rule named the flag.
+
+Also rejected, and still: refusing the post, which would gate the half that is already worth having, since the
+message is fine and only its address is in question.
 
 #### What it measured, which is not what it was built for
 
@@ -875,8 +879,8 @@ a different way than intended.
 the new thread existed, and the notice only fires once one is opened, so it always arrives after the decision it
 was meant to inform. The arm that had it without the new wording linked 0 of 3, and this is not an unfired
 layer: `open_threads` reached the model twice per run in both arms carrying it, naming the thread the agent had
-open, and nothing came of it. It is kept because it costs one query and is correct when it fires, not because it
-was measured to work.
+open, and nothing came of it. So it was removed rather than kept as a layer with a null against it, and the
+`before`/`notice` pair is what the two right-hand columns are really comparing: the standing rule, twice.
 
 Two things this cannot separate. The `wording` arm is confounded, because the new rule names `agora threads
 --mine` and the old build has no such flag, so that command failed in 2 of its 3 runs: prose without the flag is

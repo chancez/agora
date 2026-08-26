@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/chancez/agora/internal/store"
+	"github.com/google/go-cmp/cmp"
 )
 
 // setupThreads leaves bob with two threads waiting: one that concerns him and one that does not, which is
@@ -224,5 +225,33 @@ func TestDeletingSomethingEmptySaysSo(t *testing.T) {
 	}
 	if text := c.run("delete", "never-existed", "--text").stdout; !strings.Contains(text, "nothing in it") {
 		t.Errorf("printed %q", text)
+	}
+}
+
+// TestThreadsMineIsWhatToCheckBeforeOpeningAnother is the question the notice raises, asked directly. It
+// combines with the filters rather than replacing them: mine, with somebody's reply waiting in it.
+func TestThreadsMineIsWhatToCheckBeforeOpeningAnother(t *testing.T) {
+	alice := newCLI(t)
+	bob := alice.as("bob")
+	alice.mustRun("post", "parser-panic", "fixing the token loop")
+	alice.mustRun("post", "tui-widths", "the roster comes back at the minimum")
+	bob.mustRun("post", "docs-rewrite", "renaming the config keys")
+	bob.mustRun("post", "tui-widths", "Init runs before the first WindowSizeMsg")
+
+	mine := decode[[]store.Thread](t, alice.mustRun("threads", "--mine"))
+	names := make([]string, 0, len(mine))
+	for _, thread := range mine {
+		names = append(names, thread.Name)
+	}
+	if diff := cmp.Diff([]string{"tui-widths", "parser-panic"}, names); diff != "" {
+		t.Errorf("agora threads --mine, -want +got:\n%s", diff)
+	}
+
+	waiting := decode[[]store.Thread](t, alice.mustRun("threads", "--mine", "--unread"))
+	if len(waiting) != 1 || waiting[0].Name != "tui-widths" {
+		t.Errorf("agora threads --mine --unread = %v, want only tui-widths", waiting)
+	}
+	if !strings.Contains(alice.mustRun("--text", "threads", "--mine").stdout, "parser-panic") {
+		t.Error("agora --text threads --mine did not name parser-panic")
 	}
 }
