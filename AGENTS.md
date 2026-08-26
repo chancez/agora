@@ -37,6 +37,12 @@ Not built: `internal/notify`, the optional nudge that shells out to a configured
 covers the case it was for without depending on another tool, so what is left of it is a harness that runs
 no hooks at all.
 
+Codex is wired too, in `docs/setup.md`, and every hook command runs there unchanged.
+`scripts/codex-hook-experiment.sh` is its arm of the experiment and has been run: the table is in
+`docs/design.md`. Read it before changing anything here, because it says something the Claude Code table does
+not, which is that on Codex the skill moved an agent that had no hooks at all, and the layers are only visible on
+an arm without the skill.
+
 So `docs/design.md` describes rather than specifies, except where it marks something deferred. "Must" here
 means there is already a test, and that test is where you will hear about it.
 
@@ -75,7 +81,7 @@ binary does not report it or the checkout is dirty. The archive carries the bina
 `docs/setup.md` and the skill, because somebody who downloads a release should not have to clone the
 repository to wire an agent up.
 
-**The scripts in `scripts/` are not in CI.** Each starts real agent sessions through the `claude` CLI,
+**The scripts in `scripts/` are not in CI.** Each starts real agent sessions through the `claude` or `codex` CLI,
 which costs tokens and needs credentials, and what they measure is whether an agent behaves differently
 rather than whether the code works. Run them by hand when the thing they measure changes, and put the
 numbers in `docs/design.md`.
@@ -187,13 +193,19 @@ is that instructions do not move it. Read the table in `docs/design.md` before w
 That one did move, and what moved it was state rather than wording: a hook that asks a member with nothing of
 its own in the channel. Reach for a condition before reaching for more prose.
 
+`scripts/codex-hook-experiment.sh` is the same experiment with a Codex agent, and its answer is different: given
+the skill, every arm read the channel before touching anything, control included, so the hooks had nothing left
+to move and only an arm without the skill shows the layers working. Two bugs fell out of running it that no test
+had caught, both listed under "Things worth knowing up front". A harness that behaves differently is the reason
+to run the arm rather than reason about it.
+
 `scripts/doorbell-experiment.sh` asks whether an agent answers a message that arrives after its user stopped
 talking to it. Its plant is posted from inside the turn, by a `PostToolUse` hook, which is the only reason it
 measures anything: a message that exists before the prompt arrives by injection, and injection is what both
 arms already have. What it cannot reach is a session parked at a prompt, since `claude -p` exits when its turn
 ends, and that case is measured by hand in a pty.
 
-Seven traps, because a wrong result here looks exactly like a right one:
+Eight traps, because a wrong result here looks exactly like a right one:
 
 - **The control must not be able to reach the information another way.** The first run of that experiment
   was invalid: the channel file sat in both workspaces, so the control found the claim by listing the
@@ -213,6 +225,11 @@ Seven traps, because a wrong result here looks exactly like a right one:
   `/Users/<somebody>/.claude/skills/agora/agora`, a path it invented, which no permission rule covers and
   which nobody in a headless run is there to approve. Its channel was empty afterwards, which is the exact
   shape of the failure being measured. Scan the transcript for a refused call before scoring silence.
+- **Isolating a harness's config directory does not isolate the developer.** `CODEX_HOME` does not cover
+  `$HOME/.agents`, whose `AGENTS.md` told a control to coordinate through agora, and it does not cover the login
+  shell's PATH, which put an installed build ahead of the arm's own and made two runs measure the wrong binary.
+  A throwaway `$HOME`, a throwaway `ZDOTDIR`, and a preflight check that asks the shell which binary an agent
+  would get are what isolate a Codex arm.
 - **`--settings` adds to the developer's own settings rather than replacing them.** Every arm inherits every
   user-level hook, and one developer's wire agora itself: a second `inject` in each arm, and `leave --force`
   on `SessionEnd`, which released the claims an experiment was reading. `agora` on `PATH` is whatever is
@@ -259,13 +276,21 @@ for what is *addressed* to the member rather than for unread, because a wake cos
 moves a read cursor, because a doorbell that marked what it rang about as read would answer a message by
 hiding it.
 
-**Never require an environment variable only one tool sets.** Identity is `--as`, then `$AGORA_MEMBER`, then
-`$CLAUDE_CODE_SESSION_ID` as `claude-<first 8 hex>`, then `$USER`, then the worktree name. Everything after
-the second is found rather than asked for, so agora works for one agent in a plain terminal, and an
-unrecognised agent is named with `$AGORA_MEMBER` rather than by extending the chain.
+**Never require an environment variable only one tool sets.** Identity is `--as`, then `$AGORA_MEMBER`, then the
+session a hook event names, then `$CODEX_THREAD_ID`, then `$CLAUDE_CODE_SESSION_ID`, both as
+`<harness>-<8 hex of a hash of the id>`, then `$USER`, then the worktree name. Everything after the second is found rather than
+asked for, so agora works for one agent in a plain terminal, and an unrecognised agent is named with
+`$AGORA_MEMBER` rather than by extending the chain.
 
 An empty `$AGORA_MEMBER` is an error like an empty `$AGORA_DB`: it claims an identity that is not there. An
 empty `$USER` or session id falls through, since agora asked nobody to set those.
+
+**A hook takes its identity from the event, not from the environment.** All four of them, because only Claude
+Code puts its session id in a hook's environment as well as in the event. `$AGORA_AGENT` supplies the one thing
+the event does not say, which harness it came from, and that only decides the prefix. Get it wrong and one
+session becomes two members, which is worse than a wrong name: the agent is briefed about its own messages,
+warned about its own claim, and `leave` removes somebody else. `docs/design.md` has the whole of it under "A
+second harness".
 
 ## Docs
 
@@ -313,6 +338,24 @@ do Y and now does X", except in a decision record where the rejected alternative
   at 80, came back right: a bug only reachable through a pane the fallback window drops, and the reopen test
   covered the pane that fits. Clamp for drawing, keep what was asked for separately, and never fold one into the
   other.
+- **On Codex an edit is one `apply_patch` call carrying the patch text**, and the event has no `file_path` at
+  all. `Edit` and `Write` select the same hooks as matcher aliases, but the payload's `tool_name` is always
+  `apply_patch`, so anything reading a path out of a tool event has to read both shapes or it silently reads
+  none. There is also no `if` prefilter, so a hook on edits runs on every patch.
+- **A path a harness reports and a path git reports need not be the same string.** git resolves symlinks and a
+  harness does not, so on darwin an edit in `/tmp/x` is compared against a worktree at `/private/tmp/x`, the
+  relative path comes out full of `..`, and every glob misses. Resolve both sides. The guard did not, and was
+  silent on every edit a Codex agent made.
+- **A session id is not always random, so never name anything after a slice of one.** Claude Code's is a v4
+  uuid; a Codex thread id is v7, so its leading digits are a millisecond timestamp and the first eight only
+  change about once a minute. Two sessions started together shared a member, a cursor and a claim. A member name
+  is now eight hex digits of a hash of the id, which needs to know nothing about how a harness builds one.
+- **Codex runs a tool call in a login shell, resolved from the system rather than `$SHELL`.** So its PATH is the
+  developer's, not the one you passed, and an experiment that puts its own build first still measures whatever is
+  installed. `ZDOTDIR` isolates the profile for zsh, and asking the shell `command -v agora` before starting is
+  the check that makes it visible.
+- **`$HOME/.agents` is read whatever `CODEX_HOME` says.** A developer's own instructions there are in every arm,
+  and one that mentions agora turns a control into a treatment.
 - **A skill's frontmatter hooks register only once the skill is invoked.** So the "check before you
   start" wiring cannot ship inside the agora skill: a session that never invokes agora never registers
   it. That hook belongs in settings.

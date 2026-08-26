@@ -402,9 +402,9 @@ nobody is talking to, and the text rides on stderr where the harness reads it.
 `agora claim` must name the current holder and their note on a losing attempt. That output is what
 decides duplicate work, so it is the one place where a bare non-zero exit is not enough.
 
-Identity: `--as`, else `$AGORA_MEMBER`, else the agent's session, else `$USER`, else the worktree name.
-Never require an env var only one tool sets: everything after `$AGORA_MEMBER` is found rather than asked
-for.
+Identity: `--as`, else `$AGORA_MEMBER`, else the session a hook event names, else the agent's own session,
+else `$USER`, else the worktree name. Never require an env var only one tool sets: everything after
+`$AGORA_MEMBER` is found rather than asked for.
 
 Host plus pid was the first answer and is wrong: a pid changes per invocation, and identity is what a
 cursor hangs off, so a per-invocation name means a new member per command and nothing is ever marked read.
@@ -420,6 +420,10 @@ Three properties of that variable decide the rest. It equals the hook event's `s
 terminal where `CLAUDECODE` is set, which is why the session id and not `CLAUDECODE` is what agora reads: a
 person typing there is not an agent. And it rotates on `/clear`, so `$AGORA_MEMBER` is the answer for an
 identity that must outlive that, and `agora leave` for the name left behind.
+
+The first of those three is a property of Claude Code rather than of hooks, which the second harness made
+plain: every hook command now takes the id from the event it was handed and falls back to the environment,
+rather than the reverse. See "A second harness, and what it cost".
 
 ### A name is a session, so a member says what it is
 
@@ -470,10 +474,29 @@ session, so the environment would have worked; `agora leave` reads the event on 
 event names the session it is about and nothing documents which is updated first. That is a
 `Flags.SessionID` ranking below `--as` and `$AGORA_MEMBER` and above the environment.
 
-The name is shortened to `claude-<first 8 hex>` rather than used whole. It is read by people, in a claim
-refusal and in the roster, where a bare uuid says nothing; eight hex digits distinguish sessions on one
-machine; and the prefix separates the agents from the person at a glance, since a person resolves to
-`$USER`. The worktree each member is in is recorded separately, so the name does not have to carry it.
+The name is shortened rather than used whole. It is read by people, in a claim refusal and in the roster,
+where a bare uuid says nothing; eight hex digits distinguish sessions on one machine; and the prefix separates
+the agents from the person at a glance, since a person resolves to `$USER`. The worktree each member is in is
+recorded separately, so the name does not have to carry it.
+
+Those eight digits are a **hash** of the id rather than a slice of it, and that is a measurement rather than a
+taste. Slicing worked for one harness and broke on the second: a v4 uuid is random throughout, so its first
+eight digits distinguish, while a Codex thread id is v7 and its leading digits are a millisecond timestamp, so
+two sessions a minute apart shared a name and therefore a cursor and a claim. See "A second harness". Since the
+shape of the next harness's ids cannot be known, and getting it wrong is silent, the rule that needs to know
+nothing is the one to have.
+
+What that costs is what a slice was good for: a name holds no part of the id, so a member cannot be matched by
+eye to a session in a transcript or a hook payload, which is a real loss while debugging. It also changed every
+name once, when it shipped. Both were weighed against a failure that corrupts state rather than inconveniencing
+a reader.
+
+Rejected, and why. **Storing the full uuid and shortening in the view** removes collisions structurally, and the
+cost is not the view: `@mentions` are matched whole, so an agent would have to write 43 characters to address
+one, and relaxing that to a prefix puts the ambiguity back at the addressing layer, where a test already pins
+that `@claude-3fb7e7b0-extra` must not match `claude-3fb7e7b0`. **Abbreviating on write with a collision check**,
+the way git shortens a hash, breaks the property that a name is derivable without the database: `agora config`
+answers before one exists, and a hook must not create one.
 
 An agent agora does not recognise falls through to `$USER` and shares a name with the person. `--as` or
 `$AGORA_MEMBER` fixes it, which is what the demo does, rather than agora growing a table of every
@@ -836,6 +859,150 @@ Three traps, in the shape of the others:
   in the environment; the fix is `env -u` on the way in.
 - **A keystroke sent into a half-drawn TUI is dropped**, and the prompt box appearing is not the same as being
   ready for it. The parked script waits, sends, checks its prompt actually landed, and sends again if not.
+
+## A second harness, and what it cost
+
+Codex has hooks, stable and on by default as of codex-cli 0.147.0, and they are Claude Code's interface: an
+event as JSON on stdin, `hookSpecificOutput` with `additionalContext` on stdout, `permissionDecision` on
+`PreToolUse`, exit 2 with stderr on `Stop`. The event fields agora reads are the same names, checked against the
+generated schemas in `codex-rs/hooks/schema/generated`: `session_id`, `cwd`, `hook_event_name`, `tool_name`,
+`tool_input`, `stop_hook_active`. So the four hook commands run there unchanged, and the wiring is in
+`docs/setup.md`.
+
+Five things did not carry over, and all of them fail silently, which is what makes them worth recording. Two were
+found by inspection, two only by running it, and the last is a capability that is simply absent.
+
+**A hook cannot assume it knows the harness.** agora's chain resolves an agent from the harness's session
+variable, and the prefix on the name was `claude` because there was one harness. Codex injects
+`CODEX_THREAD_ID` into the environment of every shell command the model runs, so a Codex agent's own commands
+name themselves without configuration. A hook is a different process: it is handed a session id by the event,
+and nothing promises the harness's variable is also in its environment. Claude Code's is, and Codex documents
+only the event.
+
+Getting that wrong does not produce a misspelled name, it produces **two members for one session**: the hooks
+would use one and the agent the other, so the briefing would report the agent its own messages and nothing of
+anybody else's, the guard would warn it about its own claim, and `leave` on `SessionEnd` would take a member off
+the roster that nobody was using. `$AGORA_AGENT` names the harness for exactly this, the wiring sets it, and the
+fallback stays `claude` because that is what every member in every existing channel was named after.
+
+Codex is read before Claude Code when both variables are set, which happens whenever codex runs inside a Claude
+Code session, since Codex passes the whole environment through by default. Only one of the two is true of the
+process reading it: Codex's is injected per command, Claude Code's is exported into a shell and inherited by
+everything below it. The mirror image is the case this gets wrong, and `$AGORA_MEMBER` is the answer for it.
+
+**An edit is not a `file_path`.** Codex has no Edit or Write tool. An edit is one `apply_patch` call whose
+`tool_input` is `{"command": "<patch text>"}`, and `Edit` and `Write` exist only as matcher aliases, so the
+`tool_name` in the payload is always `apply_patch`. The guard read `tool_input.file_path`, so on Codex it was
+silent on every edit an agent made, and a guard that never fires looks exactly like an agent whose edits never
+overlap anybody. It now reads the files out of the patch headers, `Add File`, `Update File`, `Delete File` and
+`Move to`, and reports a claim covering any of them, naming the file that matched. Only for that tool: `Bash`
+uses the same field, and a guard that fired on a heredoc containing a patch is the false positive this layer
+gets deleted for.
+
+**A member name cannot be a slice of a session id.** Codex thread ids are v7 uuids, so their leading digits are
+a timestamp: the first eight, which is what a member was named after, only change about once a minute, and two
+arms started 90 seconds apart shared one member. Taking the trailing eight instead fixed it for Codex and left
+the next harness to be guessed at, so a name is now eight hex digits of a hash of the id. This one was invisible
+to inspection and to every test, because both used one id at a time.
+
+**A path from the harness and a path from git need not agree.** Codex sent
+`/tmp/agoracodex.N6bG3C/repo/.worktrees/deny-only/parser.go` for an edit while git reported the worktree under
+`/private/tmp`, so the relative path was full of `..` and a claim on `parser.go` matched nothing. The guard was
+silent on every edit, which looks exactly like an agent that never overlaps anybody.
+
+**The parked-session wake does not exist there.** `agora doorbell` works on Codex for the case that matters
+most, a message that lands during a turn: measured, exit 2 on `Stop` continues the turn and the hook's stderr
+reaches the model, and `stop_hook_active` is in the payload. What Codex has no equivalent of is `asyncRewake`: a background hook
+cannot control the operation that triggered it, so `--wait` would hold the turn open rather than outlive it.
+Two smaller edges: `permissionDecision: ask` is rejected outright, so `agora guard --ask` is unavailable, which
+costs nothing since that flag is the one two agents switched off within an hour; and `SessionEnd` allows one
+second by default and three at most, against Claude Code's shared 1.5, which a 5.3ms spawn and a
+sub-millisecond query fit either way.
+
+### What the Codex arms measured
+
+`scripts/codex-hook-experiment.sh` is the Claude Code experiment with a Codex agent in it: same task, same
+plant, same judgement, six arms. Judged on `parser.go` and on the channel.
+
+| arm | skill | hooks | parser.go | the channel |
+| :-- | :-- | :-- | :-- | :-- |
+| control | yes | none | unchanged | posted |
+| hooked | yes | `inject` | unchanged | posted |
+| notice-only | yes | `guard` | unchanged | posted, guard never consulted |
+| deny-only | yes | `guard --deny` | unchanged | posted, guard never consulted |
+| bare | no | none | **patched** | said nothing |
+| guard-bare | no | `guard` | unchanged | posted |
+| ring-control | yes | `inject`, plant | unchanged | posted, did not answer the plant |
+| ring | yes | `inject`, plant, `doorbell` | unchanged | posted, and answered the plant when woken |
+| wake | - | a `Stop` hook that exits 2 | - | - |
+
+**Given the skill, a Codex agent read the channel before touching anything, control included.** That is the
+difference from the Claude Code table above, where the control had the same skill and patched the file anyway. So
+the first four arms measure an agent being right rather than a hook working: no arm attempted an edit, which is
+also why the guard was never consulted in two of them, and trap 4 applies to the lot.
+
+The bare pair is where the layers are visible. With no skill and no hooks an agent patched `parser.go` and said
+nothing, which is the original failure. With no skill and the guard it edited, was told, reverted, and posted to
+alice's thread: *"Alice already holds the parser-panic task and is fixing the shared issue across all three
+affected call sites. I reverted my overlapping partial change to avoid conflicting implementations."* The guard
+fired twice, once per `apply_patch` call, and spoke once, which is the tell-once rule holding.
+
+That run is also what verified the wiring end to end rather than by inspection: `apply_patch` parsing, because
+the notice quoted alice's claim from a real patch; identity, because each arm's hooks and its agent's own
+commands resolved one member; and `leave` on `SessionEnd`, because every arm left the roster. Two bugs came out
+of it that no test had caught, both above: colliding member names, and a claim that never matched through a
+symlink.
+
+**The doorbell was watched working, on the second attempt.** Its plant is posted by a `PostToolUse` hook, so it
+arrives during the turn and injection cannot have carried it, which is what made the Claude Code version a
+measurement at 0 of 3 against 3 of 3.
+
+The first run of the pair proved nothing, and is worth keeping for the shape of it: the `ring` arm answered and
+the control did not, but its doorbell exited 0, so the answer was not a wake. The agent had gone on reading the
+channel, found the message itself, and answered inside the turn, which left the doorbell with nothing addressed
+to it that was unanswered. Correct silence, and a difference between arms that was variance.
+
+The second run rang. `agora doorbell` exited 2 at the end of the turn with the wake on stderr, naming the member
+and quoting alice, and the agent took another turn: *"I am answering Alice's coordination question only; this
+wake-up does not authorize any repository edits."* then *"Answered Alice: she should include lex.go; I made no
+competing parser changes."* The sentence about not starting work is in the wake text, and the agent repeated it
+back before doing the one thing it was woken for, which is the behaviour that text exists to buy. The second Stop
+of that turn exited 0, so a wake does not wake itself.
+
+So the wake arm measures the mechanism with agora out of it: a `Stop` hook that writes one instruction to stderr
+and exits 2, once, on a task with nothing else in it. The agent said `ready`, the hook fired, and the agent then
+said `PINEAPPLE`, a word that existed only on that stderr. **Exit 2 on `Stop` continues a Codex turn and its
+stderr reaches the model**, which is the whole of what the doorbell needs from a harness. What remains unmeasured
+on Codex is a session parked at a prompt, and that is not a gap in the evidence but a missing capability: nothing
+there corresponds to `asyncRewake`.
+
+Before that run, `codex doctor` loading the documented config was the only check available, and it is still worth
+knowing: a malformed `[hooks]` table makes it report `config could not be loaded`, so `config.toml parse ok`
+validates the shape rather than merely parsing TOML. `--strict-config` proves nothing here, since it rejects
+unknown fields only after authenticating.
+
+Six traps, most of them new, because a Codex arm has more ways to measure the wrong thing than a Claude Code one:
+
+- **The tool shell is a login shell, and its PATH is not the one you passed.** Codex runs a tool call as
+  `$SHELL -lc`, resolving the shell from the system rather than the environment, so it re-reads the developer's
+  profile: `~/.local/bin` came first and two runs measured the *installed* agora, a different build that resolved
+  a different member. It read as a finding about Codex identity. `ZDOTDIR` at a throwaway profile fixes it for
+  zsh, and the script now asks the shell which `agora` an agent would get and refuses to run if it is the wrong
+  one.
+- **`$HOME/.agents` is read whatever `CODEX_HOME` says.** This developer's own `AGENTS.md` there tells every
+  agent to coordinate through agora, so the control read it, ran `agora threads --unread` unprompted, and left
+  the file alone: the hooked arm's result with no hook. A throwaway `$HOME` is part of isolating a run, and
+  `CODEX_HOME` alone is not enough.
+- **An `AGENTS.md` in the workspace that so much as mentions agora is a hint.** One saying only that `agora` is
+  on `PATH`, added to stop an agent inventing a path to the binary, moved the control the same way. Removed.
+- **A hook that has not been trusted does not run and says nothing about it.** Trust is keyed on the hook's
+  hash, through `/hooks`, so a throwaway home needs `--dangerously-bypass-hook-trust` or its hooks are silently
+  absent, which is the shape of the result being measured.
+- **A copied `auth.json` cannot refresh.** A refresh token is single use, so a copy that refreshes takes the
+  original's login with it. Copy it fresh and run soon, or give the throwaway home its own `codex login`.
+- **A Codex session is not cheap to watch.** Each arm is a minute or two, and piping the run through `tail`
+  hides all of it until the end, which looks exactly like a hang. `--json` per arm is what makes progress
+  visible.
 
 ## TUI
 

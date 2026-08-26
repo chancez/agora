@@ -63,6 +63,10 @@ Bound the wait. The hook fires once a turn, so an unbounded one would leave a pr
 turn waiting forever; a doorbell started later takes the wait over from one left behind by an
 earlier turn, and the leftover stops at the next message or at its own timeout.
 
+Codex takes exit 2 on Stop the same way, so the first wiring works there. It has nothing like
+asyncRewake, and a background hook there cannot control the turn it came from, so --wait would
+hold the turn open instead of outliving it: on Codex, wire it without --wait.
+
 --dry-run, and a terminal on stdin, mean look rather than ring: the result goes to stdout and
 nothing is recorded, so seeing what is waiting does not spend the wake for it.`,
 		Args: cobra.NoArgs,

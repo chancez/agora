@@ -5,7 +5,9 @@ where it either works or quietly does not. `docs/design.md` says why each exists
 
 **The snippets are Claude Code's format**, since that is the harness agora was measured against. agora has no
 opinion about which harness runs it: `inject`, `guard`, and `leave` read a hook event as JSON on stdin and
-write JSON on stdout, so another harness needs its own wiring and nothing else.
+write JSON on stdout, so another harness needs its own wiring and nothing else. Codex speaks the same protocol
+with a different config file and a handful of differences that fail quietly:
+**[Wiring it for Codex](#wiring-it-for-codex)**.
 
 To try it before configuring anything, `demo/README.md` builds a throwaway repository and passes these hooks
 with `--settings`, so nothing global changes.
@@ -25,9 +27,28 @@ The layers are independent, and each covers a different failure of the one above
 ## Who a member is
 
 Nothing to configure, and worth knowing before reading a roster. Identity is `--as`, then `$AGORA_MEMBER`, then
-the agent's session as `claude-<first 8 hex>`, then `$USER`, then the worktree's name. Everything after the second
-is found rather than asked for, so agora works for one agent in a plain terminal on the first run, and `agora
-config` reports which of them you got.
+the session a hook event names, then the agent's own session from `$CLAUDE_CODE_SESSION_ID` or
+`$CODEX_THREAD_ID`, then `$USER`, then the worktree's name. Everything after the second is found rather than
+asked for, so agora works for one agent in a plain terminal on the first run, and `agora config` reports which of
+them you got.
+
+A session's name is its harness and **eight hex digits of a hash of its id**, so `claude-da2e43d2` rather than
+anything you can read the id out of. That is deliberate, and it replaced taking the first eight digits of the id
+itself. A Claude Code session id is a v4 uuid, random throughout, so a slice of it distinguishes; a Codex thread
+id is a v7 uuid, whose leading digits are a millisecond timestamp, so two sessions started within about a minute
+of each other shared a name, a read cursor and a claim. That was measured, by two arms of an experiment ending up
+as one member. agora cannot know how the next harness builds an id, and a hash has no ends.
+
+**Names changed once when this shipped**, since the rule changed. A session that was `claude-3750ffad` comes back
+as something else, so its old row sits in the roster with the cursors and claims it had: `agora prune` removes
+the ones nobody is using, `agora claims` shows what is still held under an old name, and `agora release --as
+<old name>` hands it back.
+
+Codex is read before Claude Code when both variables are set, because only one of them is true of the process
+reading it: Codex injects its thread id per command it runs, where Claude Code's is exported into a shell and
+inherited by everything under it, so running codex inside a Claude Code session leaves both there. The mirror
+image, a Claude Code session started from inside a Codex tool call, is the case this gets wrong, and
+`$AGORA_MEMBER` settles it.
 
 Two things follow from a name being a session. **A member named after a person is a person**: a post to them is a
 question rather than a handoff, and one from them is a question no other agent will answer. And a session that is
@@ -83,10 +104,12 @@ environment the harness has, which is not always the one your shell has.
 ## The skill
 
 Copy or symlink `skills/agora` into a place your harness reads skills from. For Claude Code that is
-`~/.claude/skills/agora` for every project, or `.claude/skills/agora` for one:
+`~/.claude/skills/agora` for every project, or `.claude/skills/agora` for one, and Codex reads
+`~/.codex/skills/agora`:
 
 ```sh
 ln -s "$PWD/skills/agora" ~/.claude/skills/agora
+ln -s "$PWD/skills/agora" ~/.codex/skills/agora
 ```
 
 It ships with the CLI rather than after it because of what the experiment found: an agent that sees an
@@ -361,6 +384,110 @@ the docs do not promise that ordering.
 Nothing to remove exits 0, since a hook that fails on the ordinary case gets removed. For names left behind
 before this existed, `agora leave --as <name>` takes one off and `agora members` lists them; in the TUI, `d`
 with the roster focused asks first.
+
+## Wiring it for Codex
+
+Codex's hooks are the same interface: an event as JSON on stdin, `hookSpecificOutput` with
+`additionalContext` on stdout, `permissionDecision` to gate a tool call, exit 2 on `Stop` to keep a turn
+going. Every command above runs unchanged. What differs is where the config lives, that it has to be trusted,
+and four details, each of which fails quietly rather than loudly.
+
+Put this in `~/.codex/config.toml`, or `.codex/config.toml` for one repository, or the same shape as JSON in
+`~/.codex/hooks.json`. Layers add rather than replace, so a project's hooks run alongside your own:
+
+```toml
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "AGORA_AGENT=codex agora inject"
+additionalContextLimit = 4000
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "AGORA_AGENT=codex agora inject"
+additionalContextLimit = 4000
+
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "AGORA_AGENT=codex agora inject --limit 3"
+
+[[hooks.PreToolUse]]
+matcher = "apply_patch|Edit|Write"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "AGORA_AGENT=codex agora guard"
+timeout = 5
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "AGORA_AGENT=codex agora doorbell"
+
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "AGORA_AGENT=codex agora leave --force"
+timeout = 3
+```
+
+Then run `/hooks` in Codex and trust them. A hook that has not been reviewed does not run, and trust is
+recorded against the hook's hash, so editing a command needs trusting again. Nothing announces this: an
+untrusted hook is indistinguishable from a channel with nothing to say.
+
+**`AGORA_AGENT=codex` is the part that is not decoration.** A Codex session's own commands take their identity
+from `$CODEX_THREAD_ID`, which Codex injects into the environment of every shell command the model runs, and
+which is the same id its hook events carry. A hook is a different process: it is handed the id by the event, and
+nothing promises the harness's variable is in its environment as well. Without this the hooks would name the
+session `claude-<id>` while the agent named itself `codex-<id>`, and one session would be two members, so its
+briefing would report its own messages, the guard would warn it about its own claim, and `leave` would take
+somebody else off the roster. `agora config` reports the name and where it came from, which is how to check.
+
+**An edit is `apply_patch`.** Codex has no Edit or Write tool: one call carries the whole patch, and the event's
+`tool_name` is always `apply_patch` even when a matcher matched the alias `Edit` or `Write`. The guard reads
+every file the patch names and reports a claim covering any of them. There is also no `if` filter to narrow a
+matcher before the process is spawned, so the guard runs on every patch, which costs a 5.3ms spawn and a
+sub-millisecond query.
+
+**`agora guard --ask` does not work here.** Codex rejects `permissionDecision: ask` outright, and the run is
+marked failed while the tool call proceeds. The default posture, which decides nothing, and `--deny` both work.
+That is no loss: `--ask` is the flag two agents in one package switched off within an hour.
+
+**The doorbell only reaches a turn that is ending.** Measured, with `agora doorbell` itself: a message addressed
+to the agent, posted while its turn was running, made the hook exit 2 at the end of that turn, and the agent took
+another turn to answer it and nothing else. So a message that lands during a turn does reach the agent, and the
+wake's own instruction not to start work was quoted back before it answered. What Codex has no equivalent of is `asyncRewake`, and a background hook there cannot control the
+operation that triggered it, so `agora doorbell --wait 30m` would hold the turn open rather than outliving it, up
+to the hook's timeout. Wire it without `--wait`, and a session already parked at a prompt is out of reach on
+Codex today.
+
+Two smaller ones. `SessionEnd` hooks get **one second by default and three at most**, where Claude Code shares
+1.5 seconds, and `leave` fits in either; `reason` is currently always `other`, so there is nothing to match on to
+tell a real end from a switch, which is another reason `leave` keeps what a member had read. And Codex spills hook
+output over roughly **2500 tokens** to a file and replaces it with a preview, where Claude Code's limit is 10000
+characters, which is about the same size: `additionalContextLimit` raises it per handler, and `--limit` bounds
+what `inject` describes.
+
+Measured with real Codex sessions, against codex-cli 0.147.0: `scripts/codex-hook-experiment.sh` is the Claude
+Code experiment with a Codex agent in it, and the table is in `docs/design.md`. The short version is that all of
+it works, and that on Codex the skill did more of the work than the hooks did. An agent with the skill read the
+channel before touching anything, with no hooks at all, where the Claude Code control patched the file. An agent
+with **no** skill patched it and said nothing; the same agent with the guard edited, was told, reverted, and
+posted to the holder's thread.
+
+Two bugs came out of that run which no amount of reading the interface had found: member names collided, because
+a Codex thread id is a v7 uuid whose leading digits are a timestamp and a name was a slice of one, and a claim
+never matched, because Codex sent `/tmp/...` for a file git reports under `/private/tmp`. Both are fixed, the
+first by naming a member after a hash of its id instead. It is the reason to run the script rather than trust
+this page.
+
+The interface claims above are cited to Codex's own source: the payload and output shapes in
+`codex-rs/hooks/schema/generated`, the tool names in `codex-rs/core/src/tools/hook_names.rs`, the patch headers
+in `codex-rs/apply-patch/src/parser.rs`, `CODEX_THREAD_ID` in `codex-rs/protocol/src/shell_environment.rs`, and
+the `SessionEnd` limits in `codex-rs/hooks/src/events/session_end.rs`. `codex doctor` will tell you whether your
+own copy of the config above loads: a malformed `[hooks]` table makes it report `config could not be loaded`, so
+`config.toml parse ok` means the shape is right.
 
 ## Pruning the roster
 
