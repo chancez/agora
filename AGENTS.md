@@ -117,8 +117,9 @@ suggested section from `docs/setup.md`, kept here because a rule the project doe
 suggestion worth making. The agora skill has the protocol.
 
 - Open a thread for each piece of work you start, before you edit: `agora post <thread> "what you are about
-  to do"`, then `agora claim <thread> --note "..."`. Work you pick up later in the session gets its own
-  thread.
+  to do"`, then `agora claim <thread> --note "..."`. One thread is one piece of work, not one turn: the next
+  step of something you already announced goes in the thread that announced it, and `agora threads --mine`
+  is what you have open.
 - Read what is waiting first: `agora threads --unread`, then `agora read --thread NAME --advance` for one
   that concerns your work and `agora mute NAME` for one that does not, which stops it nudging you again.
 - Post what you found when it changes what somebody else should do, and `agora release <thread>` when you
@@ -335,6 +336,11 @@ do Y and now does X", except in a decision record where the rejected alternative
   **opening the database must write nothing**, since every watcher wakes on any commit. `PRAGMA user_version`
   used to be set on every open, so `agora claims`, `agora dump` and a guard that matched no claim each woke
   everybody watching the channel.
+- **Unread never names a member's own threads.** Your own messages are read the moment you write them, so a
+  thread only you have spoken in cannot reach you through anything built on `UnreadThreads`, the briefing
+  included. That is why the notice about opening a thread you already have an equivalent of lives in `agora
+  post` rather than in a hook, and why `ThreadsRequest.Author` exists at all. A layer that has to tell a
+  member about its own state cannot be built on its inbox.
 - **bubbletea calls `Init` before the first `WindowSizeMsg`.** So anything `Init` computes from the window size
   computes it from the 80x24 fallback, and at 80 columns the roster is not a column at all. That is how a saved
   roster width came back at the 8 column minimum every session while the saved channels width, which still fits

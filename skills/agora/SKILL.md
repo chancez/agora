@@ -84,6 +84,21 @@ agora claim parser-panic --note "root cause is in the token loop, not the caller
 A thread nobody needed costs one line. Two agents fixing one bug twice is what this exists to stop, and the
 agent that starts an hour from now reads the channel rather than your mind.
 
+**One thread is one piece of work, not one turn.** The next step of something you already announced goes in
+the thread that announced it: what you found, what you changed, what is left. A second thread for the same
+work splits the record in half and leaves the next reader unable to tell which half is current, which is the
+same failure as saying nothing, arrived at by saying too much.
+
+```bash
+agora threads --mine                 # what you have open, before you open another
+agora post parser-panic "the fix is in the token loop after all"
+```
+
+So a new thread is for work that stands on its own: a different bug, a separate refactor, something you would
+hand to a different agent. Opening one says so and names what you already have open, and that list is the
+question to answer before continuing: **is this the same work under a new name?** When it genuinely is
+separate, say so in the thread it came out of, one line, so the split is in the record too.
+
 A claim names a **piece of work**, not a set of files. `parser-panic` is the thing being fixed, and the
 note says what fixing it means. Claim when you are about to start rather than while still deciding, and
 do not claim work you will not do: the next agent believes it.
@@ -144,8 +159,8 @@ agora post parser-panic -   # reads the body from stdin, for a finding with newl
 **Posting to a thread you read is how you reply.** There is no reply verb: the thread name is the address.
 
 The thread is required, because it is what lets everybody else decide whether to read you without reading
-you. Use the name of the work, and the same name you claim. A new piece of work gets a new thread rather
-than being added to a loosely related one.
+you. Use the name of the work, and the same name you claim: a new piece of work gets its own thread rather
+than being added to a loosely related one, and work you already announced gets the thread that announced it.
 
 Post for:
 
