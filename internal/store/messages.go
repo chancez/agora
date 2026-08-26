@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // messageColumns is the select list for every message query, so none can return a message without both its
@@ -131,15 +132,24 @@ GROUP BY n.thread`
 	args := []any{req.Member, req.Member, channelID, channelID, channelID, channelID, req.Member, channelID}
 	// Unread is counted the same whatever the filter, muted or not, so a muted thread still reports how much
 	// has piled up in it. What the filter decides is which threads come back at all.
+	//
+	// Collected rather than appended to the query in place: Author combines with either filter, and two
+	// HAVING keywords is a syntax error. Placeholders still bind in the order the clauses are written.
+	var having []string
 	switch req.Filter {
 	case UnreadThreads:
-		query += `
-HAVING sum(CASE WHEN m.author != ? AND m.seq > coalesce(c.cursor, 0) THEN 1 ELSE 0 END) > 0
-   AND coalesce(max(c.muted), 0) = 0`
+		having = append(having, `sum(CASE WHEN m.author != ? AND m.seq > coalesce(c.cursor, 0) THEN 1 ELSE 0 END) > 0
+   AND coalesce(max(c.muted), 0) = 0`)
 		args = append(args, req.Member)
 	case MutedThreads:
-		query += `
-HAVING coalesce(max(c.muted), 0) = 1`
+		having = append(having, `coalesce(max(c.muted), 0) = 1`)
+	}
+	if req.Author != "" {
+		having = append(having, `sum(CASE WHEN m.author = ? THEN 1 ELSE 0 END) > 0`)
+		args = append(args, req.Author)
+	}
+	if len(having) > 0 {
+		query += "\nHAVING " + strings.Join(having, "\n   AND ")
 	}
 	// Most recently active first, by the third column, since that is the order attention goes in.
 	query += `

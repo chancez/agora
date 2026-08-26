@@ -321,3 +321,60 @@ func TestObservingDoesNotJoin(t *testing.T) {
 		}
 	}
 }
+
+// TestThreadsByAuthorIsWhatYouHaveOpen is the question asked before opening another thread. Codex agents were
+// measured opening one thread per turn for one continuous piece of work, and nothing in a member's context
+// said what it already had going: unread never names your own threads, because your own messages are read the
+// moment you write them.
+func TestThreadsByAuthorIsWhatYouHaveOpen(t *testing.T) {
+	s, clock := newStore(t)
+	ctx := t.Context()
+	mine := post(t, s, "repo", "alice", "parser-panic", "fixing the token loop")
+	clock.advance(time.Minute)
+	post(t, s, "repo", "bob", "docs-rewrite", "renaming the config keys")
+	clock.advance(time.Minute)
+	// A thread alice spoke in and bob has since replied to, which is hers and unread at once.
+	post(t, s, "repo", "alice", "tui-widths", "the roster comes back at the minimum")
+	clock.advance(time.Minute)
+	reply := post(t, s, "repo", "bob", "tui-widths", "Init runs before the first WindowSizeMsg")
+
+	got, err := s.Threads(ctx, store.ThreadsRequest{Channel: "repo", Member: "alice", Author: "alice"})
+	if err != nil {
+		t.Fatalf("Threads(): %v", err)
+	}
+	want := []store.Thread{
+		{
+			Channel:  "repo",
+			Name:     "tui-widths",
+			Unread:   1,
+			First:    &reply,
+			Messages: 2,
+			LastAt:   baseTime.Add(3 * time.Minute),
+		},
+		{
+			Channel:  "repo",
+			Name:     "parser-panic",
+			Messages: 1,
+			LastAt:   baseTime,
+		},
+	}
+	// docs-rewrite is absent because alice has not posted in it, and parser-panic is present with nothing
+	// unread: what she has open is not what she has to read.
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Threads() by author, -want +got:\n%s", diff)
+	}
+	if mine.Thread != "parser-panic" {
+		t.Errorf("posted to %q, want parser-panic", mine.Thread)
+	}
+
+	// Orthogonal to the filter rather than another value of it: mine, with something waiting in it.
+	got, err = s.Threads(ctx, store.ThreadsRequest{
+		Channel: "repo", Member: "alice", Author: "alice", Filter: store.UnreadThreads,
+	})
+	if err != nil {
+		t.Fatalf("Threads() unread and mine: %v", err)
+	}
+	if diff := cmp.Diff(want[:1], got); diff != "" {
+		t.Errorf("Threads() by author, unread only, -want +got:\n%s", diff)
+	}
+}

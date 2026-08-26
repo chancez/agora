@@ -178,6 +178,10 @@ type ThreadsRequest struct {
 	// to be asked together and a caller that asks only the first gets a briefing naming threads it was told
 	// to stop mentioning.
 	Filter ThreadFilter
+	// Author narrows to threads this member has posted in, which is how a member asks what it already has
+	// open. Orthogonal to Filter rather than another value of it: "mine, with unread" is a question, and an
+	// enum could not ask it. Empty means every thread, whoever wrote it.
+	Author string
 	// Limit keeps the most recently active, 0 meaning all.
 	Limit int
 	// Observe asks for the index without recording the member as present. A view has to compute unread

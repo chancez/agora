@@ -14,6 +14,7 @@ func newThreadsCmd(a *app) *cobra.Command {
 	var (
 		unreadOnly bool
 		mutedOnly  bool
+		mineOnly   bool
 		limit      int
 	)
 	cmd := &cobra.Command{
@@ -33,7 +34,12 @@ backlog. What you dismiss, you are saying you did not need.
 
 --unread narrows to threads with something waiting, which is the triage view. Without
 it you get every thread, which is the browsing view. --muted is what you have
-dismissed, with what has arrived in each since.`,
+dismissed, with what has arrived in each since.
+
+--mine is the threads you have posted in, and the question to ask before opening
+another: work that continues something you already announced belongs in the thread
+that announced it. It combines with the others, so --mine --unread is your own work
+somebody has replied to.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, cfg, err := a.open()
@@ -49,10 +55,15 @@ dismissed, with what has arrived in each since.`,
 			case mutedOnly:
 				filter = store.MutedThreads
 			}
+			author := ""
+			if mineOnly {
+				author = cfg.Member.Value
+			}
 			threads, err := s.Threads(cmd.Context(), store.ThreadsRequest{
 				Channel:  cfg.Channel.Value,
 				Member:   cfg.Member.Value,
 				Filter:   filter,
+				Author:   author,
 				Limit:    limit,
 				Worktree: &cfg.Worktree.Value,
 			})
@@ -68,6 +79,7 @@ dismissed, with what has arrived in each since.`,
 	}
 	cmd.Flags().BoolVar(&unreadOnly, "unread", false, "only threads with something you have not read")
 	cmd.Flags().BoolVar(&mutedOnly, "muted", false, "only threads you have muted, with what has piled up in each")
+	cmd.Flags().BoolVar(&mineOnly, "mine", false, "only threads you have posted in, which is what you have open")
 	cmd.Flags().IntVar(&limit, "limit", 0, "at most N threads, keeping the most recently active, 0 for all")
 	return cmd
 }
